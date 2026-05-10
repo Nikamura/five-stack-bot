@@ -1,0 +1,13 @@
+services:
+  bot:
+    build: .
+    image: five-stack-bot:latest
+    container_name: five-stack-bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DB_PATH=/app/data/five-stack.db
+      - DEFAULT_TZ=${DEFAULT_TZ:-Europe/Vilnius}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./data:/app/data

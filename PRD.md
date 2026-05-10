@@ -31,7 +31,8 @@ The target users are adults with shifting evening schedules. The bot's job is to
 | **Roster** | The list of players the bot considers part of this chat. Tagged on `/lfp`, eligible to vote. Defined and edited by chat members. |
 | **Session** | One `/lfp` invocation. Has a slot range, a set of votes, and at most one locked party. |
 | **Slot** | A 30-minute candidate start time within the session's range (e.g., 19:30, 20:00, 20:30…). |
-| **Vote** | A roster member's stance on a slot: ✅ yes / 🤷 maybe / ❌ no. Defaults to "no vote" until cast. |
+| **Vote** | A roster member's stance on a slot: ✅ yes / 🤷 maybe / ❌ no. Defaults to "no vote" until cast. Tapping a slot button cycles ✅ → 🤷 → ❌ → ✅ (no "cleared" stop). |
+| **Opener** | The user who ran `/lfp`. Auto-added to the roster (if not already in it) and auto-✅'d on every slot. Tap-to-change works exactly like any other voter. |
 | **Lock** | The bot's declaration that a party is forming at a specific slot, with a specific 5/3/2 size and a specific player list. |
 | **Alternate** | A player who voted yes on the locked slot but wasn't in the first 5. Auto-promoted if a locked player drops. |
 
@@ -42,36 +43,44 @@ The target users are adults with shifting evening schedules. The bot's job is to
 A session can be opened two ways:
 
 - **Wizard mode (default for tap users):** `/lfp` with no args replies with an inline keyboard. Step 1 picks the **start hour**; step 2 picks the **end hour** (only hours after the chosen start are offered); step 3 is a confirm screen showing the range and the chat's current stack-priority. This is the primary path on mobile.
-- **Shortcut (power users):** `/lfp 18-23` opens a session immediately for that range, no keyboard. Args are integer hours; end hour `24` means midnight.
+- **Shortcut (power users):** `/lfp 18-23` opens a session immediately for that range, no keyboard. Args are integer hours; end hour `24` means midnight. The shortcut also accepts an optional bracketed stacks list and any number of `@mentions` in any order, so `/lfp 18-23 [5,3,2] @karolis @tomas` opens the session, persists the stacks for the chat, and folds the tagged users into the roster — all in one message. This makes "fresh chat → first session" a single command.
 
-Only **one active session per chat**. A second `/lfp` while one is active replies with a link to the running session and a `[Cancel current]` button.
+Only **one active session per chat**. A second `/lfp` (or `/lfp_bump`) on an active session **bumps the poll**: re-posts the live state as a fresh message at the bottom of the chat, tombstones the old message (`↓ Session moved to a fresh message — vote below.`), and points all future body edits at the new message. Old buttons keep working — the callback handler routes by session id, not message id.
 
 The session **auto-archives** when:
   - the last slot's start time has passed, OR
   - 03:00 local time hits, whichever comes first.
 
-**`/lfp-cancel`** — or the inline `[Cancel session]` button on the session message — ends the session manually. Cancellation always asks for one confirmation tap before destroying state.
+**`/lfp_cancel`** is the only way to end a session manually — there is no cancel button on the session keyboard, so misclicks during voting can't tear down the party. Cancellation asks for one confirmation tap before destroying state.
 
 After archive, a fresh `/lfp` starts a brand-new session.
 
 ### 5.2 Roster
 
-The first `/lfp` in a chat with no roster routes the initiator into a roster-setup flow before opening the session: paste `@`-mentions, or reply to a player's chat message and tap `[Add this user]`. Roster persists indefinitely and is reused for every future session.
+The first `/lfp` in a chat with no roster shows a short instructions message explaining the three ways to seed the roster: `/lfp_add @user`, replying to a player's message with `/lfp_add`, or running `/lfp 18-23 @user1 @user2 …` to add and open in a single command. Roster persists indefinitely and is reused for every future session.
+
+The session **opener** is auto-added to the roster on `/lfp`. Telegram exposes the opener's user id directly, so they're a real roster entry from the first tap.
+
+For users added by `@mention` (where the bot only sees the handle, not the user id), the roster stores them under a synthetic id keyed off the handle. The first time that user interacts with the bot — usually a vote tap — the synthetic entry is rebound to their real Telegram id.
 
 Roster management is keyboard-driven, with typed shortcuts available:
 
-- **`/lfp-roster`** — prints the current roster as an inline keyboard, one button per player. Tapping a name opens a `[Remove]` confirm. Footer buttons: `[➕ Add player]`, `[Done]`.
-- **`/lfp-add`** — with no args, explains the two add methods (mention or reply to a message). With `@username` or as a reply, adds directly.
-- **`/lfp-remove`** — with no args, opens the same roster keyboard pre-armed for removal. With `@username`, removes directly.
+- **`/lfp_roster`** — prints the current roster as an inline keyboard, one button per player. Tapping a name opens a `[Remove]` confirm. Footer buttons: `[➕ Add player]`, `[Done]`.
+- **`/lfp_add`** — with no args, explains the two add methods (mention or reply to a message). With `@username` or as a reply, adds directly. Multiple `@mentions` in a single message all get added at once.
+- **`/lfp_remove`** — with no args, opens the same roster keyboard pre-armed for removal. With `@username`, removes directly.
 - Removing a player who's currently locked into an active session also removes their lock and triggers re-evaluation (see §5.5).
+- Any roster mutation while a session is active triggers a session re-render so the slot tallies and voter summary stay correct.
 
 ### 5.3 Voting
 
 - The session message displays each slot as a row with three tally counters: ✅ count, 🤷 count, ❌ count.
-- Inline buttons let any chat member toggle their vote per slot.
+- Below the slot table, a per-voter summary lists each roster member with their compressed slot ranges per stance: `✅ Karolis (all), Tomas (18:00-19:30, 21:00-22:00)`. Contiguous slots collapse into ranges; if a voter chose the same stance on every slot, the range reads `(all)`. Skipped users (see §5.4) appear under ❌ as `Name (skipped)`.
+- Inline buttons let any chat member toggle their vote per slot. Tapping cycles ✅ → 🤷 → ❌ → ✅. There is **no "cleared" stop** in the cycle — once you've voted on a slot you can't return to "no vote yet" via tapping. (Initial state is still "no vote" until the first tap.)
+- The opener is auto-✅'d on every slot when the session is created, on the assumption that the person opening is one of the players. They can flip individual slots to 🤷 or ❌ as needed.
 - Players can change their vote at any time while the session is active.
 - A bulk **"I can't play tonight"** button sets all of a player's slots to ❌ in one tap.
 - Votes from non-roster chat members are accepted but **don't count toward lock decisions**; they're shown separately as "+N spectators interested" for visibility.
+- Slot-tap callbacks answer immediately (with an optimistic toast like `21:00: ✅`); the message body re-render is debounced ~1s so vote bursts coalesce into a single edit and don't trip Telegram's per-message rate limit.
 
 ### 5.4 Lock logic
 
@@ -82,6 +91,8 @@ The chat has a **valid-stack set**, configurable via `/lfp-stacks` (see §5.7), 
 3. **Otherwise, try the next-largest enabled stack** (default 3). Lock the slot with the most ✅ votes (≥ 3) at 3-stack, choosing earliest on tie.
 4. **Otherwise, try 2-stack** by the same rule (≥ 2 ✅).
 5. **Otherwise, no lock** — the bot waits or eventually archives the session unanswered.
+
+While no actual lock is in effect, the body shows a **tentative-lock footer** when *any* slot has reached the smallest valid stack: `⏳ Could play 3-stack at 19:00 with Karolis, Tomas, Justas — waiting on more votes for a bigger party.` This makes "we could play right now if nobody else shows up" visible without parsing the table.
 
 The "skip 4-stack" rule from your group's preference is implemented by 4 being absent from the default valid-stack set, not by hardcoded logic. A different chat can enable 4 if they want.
 
@@ -117,15 +128,22 @@ If a re-evaluation **dissolves** the lock entirely (e.g., a 5-stack drop with no
 
 All configuration is reachable two ways: typed command (power users) or inline keyboard (tap users).
 
-- **`/lfp-tz`** — with no args, shows quick-pick buttons for common zones (`Europe/Vilnius`, `Europe/Berlin`, `Europe/London`, `Europe/Helsinki`, `UTC`) plus an `[Other…]` button that prompts for a typed IANA zone. With an arg (e.g., `/lfp-tz Europe/Vilnius`), sets directly. Default for new chats: `Europe/Vilnius`. Affects slot display, "today," T-15 reminder firing, and the 03:00 archive cutoff. DST is handled by the underlying TZ database.
-- **`/lfp-stacks`** — opens a toggle keyboard for which party sizes are valid. Each button is one number with its current state: `[5 ✅] [4 ❌] [3 ✅] [2 ✅]`. Tapping flips it; `[Save]` persists. Default: `{5, 3, 2}` (LoL flex queue–compatible). Order is fixed at largest-first; only inclusion is configurable.
-- **`/help`** (alias `/lfp-help`) — prints the full command list with one-line descriptions and notes which support inline keyboards.
+- **`/lfp_tz`** — with no args, shows quick-pick buttons for common zones (`Europe/Vilnius`, `Europe/Berlin`, `Europe/London`, `Europe/Helsinki`, `UTC`) plus an `[Other…]` button that prompts for a typed IANA zone. With an arg (e.g., `/lfp_tz Europe/Vilnius`), sets directly. Default for new chats: `Europe/Vilnius`. Affects slot display, "today," T-15 reminder firing, and the 03:00 archive cutoff. DST is handled by the underlying TZ database.
+- **`/lfp_stacks`** — opens a toggle keyboard for which party sizes are valid. Each button is one number with its current state: `[5 ✅] [4 ❌] [3 ✅] [2 ✅]`. Tapping flips it; `[Save]` persists. Default: `{5, 3, 2}` (LoL flex queue–compatible). Order is fixed at largest-first; only inclusion is configurable.
+- **`/help`** (alias `/lfp_help`) — prints the full command list with one-line descriptions and notes which support inline keyboards.
+
+> **Naming note.** The Telegram Bot API's command grammar doesn't allow `-`, so command names use `_` (`/lfp_cancel`, `/lfp_add`, …). The hyphenated forms in this document are documentation-only labels matching the original PRD prose; the actual user-facing commands use underscores.
 
 ### 5.8 Permissions
 
-The bot is **trust-based**: any member of the chat can run any command, including `/lfp-cancel`, `/lfp-remove`, and `/lfp-tz`. This fits a small private friend group with high trust. Every state-changing command writes an audit-log entry recording (chat, user, command, timestamp, args) so abuse is visible after the fact.
+The bot is **trust-based**: any member of the chat can run any command, including `/lfp_cancel`, `/lfp_remove`, and `/lfp_tz`. This fits a small private friend group with high trust. Every state-changing command writes an audit-log entry recording (chat, user, command, timestamp, args) so abuse is visible after the fact.
 
-The bot itself does not need Telegram admin privileges in the chat.
+The bot itself does not require Telegram admin privileges. Two admin rights are **optional** and improve UX when granted:
+
+- **Pin messages** — the bot pins the active session poll to the top of the chat (with notifications disabled), and unpins on cancel/archive.
+- **Delete messages** — the bot best-effort deletes user command messages (`/lfp_add @x`, `/lfp_tz Europe/Vilnius`, etc.) so the chat stays focused on the session poll.
+
+Both are silent no-ops if the bot doesn't have the right; nothing breaks. Bot replies that are redundant with the session message (e.g., "Removed @karolis.") are ephemeral — they auto-delete after ~8s using the bot's always-available right to delete its own messages.
 
 ## 6. Commands (reference)
 
@@ -133,17 +151,19 @@ Most commands work with **no args** (open an inline-keyboard wizard) **or with a
 
 | Command | What it does | Wizard? |
 |---|---|---|
-| `/lfp` | Open a session via start/end-hour picker. | ✅ |
+| `/lfp` | Open a session via start/end-hour picker. On an active session, **bumps the poll** to the bottom. | ✅ |
 | `/lfp <start>-<end>` | Shortcut: open immediately for that range. | — |
-| `/lfp-cancel` | Cancel the active session (with one-tap confirm). | ✅ |
-| `/lfp-roster` | Show roster with per-row management buttons. | ✅ |
-| `/lfp-add [@user]` | Add to roster — by mention, reply, or interactive flow. | ✅ |
-| `/lfp-remove [@user]` | Remove from roster — by mention or pick from list. | ✅ |
-| `/lfp-skip [@user]` | Mark a roster member as ❌ for this session only. | ✅ |
-| `/lfp-tz [zone]` | Set timezone — quick-pick buttons or typed IANA zone. | ✅ |
-| `/lfp-stacks` | Toggle which party sizes are valid (default `{5,3,2}`). | ✅ |
-| `/lfp-stats` | Show chat stats (read-only). | — |
-| `/help` | Help text (alias: `/lfp-help`). | — |
+| `/lfp <start>-<end> [stacks] @tags…` | Shortcut + override stack priority + add `@tags` to roster, all in one message. Tokens may appear in any order. | — |
+| `/lfp_bump` | Re-post the active poll at the bottom of the chat (alias: `/lfp_show`). | — |
+| `/lfp_cancel` | Cancel the active session (with one-tap confirm). | ✅ |
+| `/lfp_roster` | Show roster with per-row management buttons. | ✅ |
+| `/lfp_add [@user]` | Add to roster — by mention, reply, or interactive flow. | ✅ |
+| `/lfp_remove [@user]` | Remove from roster — by mention or pick from list. | ✅ |
+| `/lfp_skip [@user]` | Mark a roster member as ❌ for this session only. | ✅ |
+| `/lfp_tz [zone]` | Set timezone — quick-pick buttons or typed IANA zone. | ✅ |
+| `/lfp_stacks` | Toggle which party sizes are valid (default `{5,3,2}`). | ✅ |
+| `/lfp_stats` | Show chat stats (read-only). | — |
+| `/help` | Help text (alias: `/lfp_help`). | — |
 
 ## 7. UX Sketches
 
@@ -234,22 +254,24 @@ Remove @ignas from the roster?
 five-stack-bot — coordinate tonight's LoL party.
 
 Sessions
-  /lfp                Open a session (wizard).
-  /lfp 18-23          Open immediately for 18:00–23:00.
-  /lfp-cancel         Cancel the active session.
+  /lfp                       Open a session (wizard).
+  /lfp 18-23                 Open immediately for 18:00–23:00.
+  /lfp 18-23 [5,3,2] @a @b   Inline stacks + tags (adds tags to roster).
+  /lfp_bump                  Re-post the poll at the bottom of chat.
+  /lfp_cancel                Cancel the active session.
 
 Roster
-  /lfp-roster         Show & manage roster.
-  /lfp-add @user      Add a player (or reply to their message).
-  /lfp-remove @user   Remove a player.
-  /lfp-skip @user     Mark as no-show for this session only.
+  /lfp_roster         Show & manage roster.
+  /lfp_add @user      Add a player (or reply to their message).
+  /lfp_remove @user   Remove a player.
+  /lfp_skip @user     Mark as no-show for this session only.
 
 Settings
-  /lfp-tz             Set timezone.
-  /lfp-stacks         Toggle valid party sizes.
+  /lfp_tz             Set timezone.
+  /lfp_stacks         Toggle valid party sizes.
 
 Stats
-  /lfp-stats          Aggregate session metrics.
+  /lfp_stats          Aggregate session metrics.
 
   /help               This message.
 
@@ -258,7 +280,7 @@ Most commands open an inline keyboard when run with no arguments.
 
 ### Session message (live)
 
-The message body shows aggregate tallies; the inline keyboard below it lets each user cast/change their own vote. Tapping a slot button cycles **the tapping user's** vote (yes → maybe → no → cleared) and pops up a confirmation toast with their new state. The message body is then re-edited with updated aggregate counts.
+The message body shows aggregate tallies and a per-voter slot summary; the inline keyboard below it lets each chat member cast/change their own vote. Tapping a slot button cycles **the tapping user's** vote (✅ → 🤷 → ❌ → ✅) and pops up a confirmation toast with their new state. The message body re-edits ~1s later with the new aggregate counts (debounced to coalesce vote bursts).
 
 Body:
 
@@ -275,7 +297,14 @@ Roster: @karolis @tomas @mantas @justas @aurimas @ignas
   21:00  ✅ 5   🤷 0   ❌ 0   ← 🔒 5-stack locked
   21:30  ✅ 3   🤷 1   ❌ 0
   22:00  ✅ 1   🤷 0   ❌ 2
+
+✅ Karolis (all), Tomas (18:30-21:30), Mantas (19:00-21:30), Justas (19:00-22:00), Aurimas (21:00-21:30)
+🤷 Ignas (19:00-19:30, 20:30-21:30)
+❌ Aurimas (18:00-18:30, 22:00-22:30)
+Tap a slot to cycle ✅ → 🤷 → ❌. 🚫 below sets every slot to ❌.
 ```
+
+(Before any actual lock, a `⏳ Could play …` line replaces the per-slot lock indicator — see §5.4.)
 
 Inline keyboard:
 
@@ -286,8 +315,9 @@ Inline keyboard:
   [22:30]  [23:00]
 
   [🚫 I can't play tonight]
-  [❌ Cancel session]
 ```
+
+(No cancel button — only `/lfp_cancel` ends a session, to make tear-down a deliberate command rather than a misclickable button.)
 
 ### GAME ON announcement
 
@@ -330,18 +360,23 @@ Target environment: a small VPS (Hetzner CX11 or DigitalOcean equivalent, ~€4�
 
 ### 8.3 Data model (sketch)
 
-- `chats(chat_id, tz, valid_stacks, created_at)` — `valid_stacks` is a sorted CSV like `"5,3,2"`, edited via `/lfp-stacks`.
-- `roster_members(chat_id, telegram_user_id, display_name, added_at)`
-- `sessions(id, chat_id, start_hour, end_hour, opened_at, archived_at, lock_state)`
+- `chats(chat_id, tz, valid_stacks, created_at)` — `valid_stacks` is a sorted CSV like `"5,3,2"`, edited via `/lfp_stacks`.
+- `roster_members(chat_id, telegram_user_id, username, display_name, added_at)` — `username` enables `@`-form mentions when available; `telegram_user_id` may be a synthetic negative id derived from the lowercase handle until the user's first interaction binds the real id.
+- `sessions(id, chat_id, opener_user_id, opener_display_name, start_hour, end_hour, poll_message_id, game_on_message_id, opened_at, archive_at, archived_at)`
 - `votes(session_id, telegram_user_id, slot_minutes, value, voted_at)` — `value` ∈ `yes|maybe|no`. `slot_minutes` is minutes-from-midnight in chat-local time.
+- `session_skips(session_id, telegram_user_id)` — session-only no-shows from `/lfp_skip`. Counted as ❌ for lock evaluation only; roster membership is unchanged.
 - `locks(session_id, slot_minutes, size, locked_at)` — at most one row per session at a time.
-- `lock_party(session_id, telegram_user_id, role)` — `role` ∈ `core|alternate`, `core` ordered by vote-time.
-- `scheduled_jobs(id, fire_at, kind, payload)` — `kind` ∈ `archive_session|t_minus_15`. Rehydrated into in-process timers on boot.
+- `lock_party(session_id, telegram_user_id, role, vote_order)` — `role` ∈ `core|alternate`, `core` ordered by vote-time via `vote_order`.
+- `scheduled_jobs(id, fire_at, kind, payload, created_at)` — `kind` ∈ `archive|t15`. Rehydrated into in-process timers on boot.
 - `audit_log(id, chat_id, telegram_user_id, command, args, at)`
 
-### 8.4 Concurrency
+### 8.4 Concurrency & rate limits
 
-All vote callbacks are serialised per session via a mutex (in-process is enough at this scale). After every state change, the lock-evaluation routine runs end-to-end and produces a new `lock_state`. Differences between old and new `lock_state` produce the user-visible side effects (edit poll message, post GAME ON, schedule/cancel T-15, etc.) — all idempotent.
+All vote handlers and roster mutations are serialised per session via an in-process per-session mutex. After every state change, the lock-evaluation routine runs end-to-end and produces a new lock state. Differences between old and new produce the user-visible side effects (post GAME ON, post party-changed follow-up, schedule/cancel T-15, etc.) — all idempotent.
+
+The poll-message edit is **debounced** ~1s per session: each state change reschedules a single pending edit, so a burst of votes coalesces into one `editMessageText` call and stays under Telegram's per-message edit rate limit (~1/s for messages with inline keyboards). `safeEditMessage` also catches HTTP 429 explicitly: it sleeps `retry_after + 1s` and retries once before giving up.
+
+Callback-query handlers always answer the query *first* (with an optimistic toast computed from the persisted state before the work runs) and do the DB / message-edit work after. This clears the button spinner immediately so rapid taps register cleanly. Toast text is best-effort under fast retaps; the message body remains the source of truth.
 
 ### 8.5 Resilience
 
@@ -354,7 +389,7 @@ All vote callbacks are serialised per session via a mutex (in-process is enough 
 These are intentionally deferred from v1; capturing them here so they aren't rediscovered later.
 
 - **First-run onboarding** when the bot is added to a new chat — does it auto-greet? (For now: silent until first `/lfp`.)
-- **Privacy/data retention** beyond the audit log. v1 keeps everything indefinitely; future revision may add a `/lfp-forget` command.
+- **Privacy/data retention** beyond the audit log. v1 keeps everything indefinitely; future revision may add a `/lfp_forget` command.
 - **Bot identity** — final username + display name + profile picture. Not blocking implementation.
 - **Telemetry / error reporting** — none in v1; logs go to stdout, scraped by the host.
 

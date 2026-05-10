@@ -1,0 +1,11 @@
+node_modules
+dist
+data
+*.log
+.env
+.git
+.gitignore
+.agents
+.claude
+PRD.md
+README.md
