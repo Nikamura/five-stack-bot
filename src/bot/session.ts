@@ -268,6 +268,34 @@ export async function markSkip(args: {
 }
 
 /**
+ * Toggle "I can fill if needed" for `userId` on this session. Returns the
+ * resulting state so the callback can show an accurate toast.
+ *
+ * Filler users' ✅/🤷 votes are pooled into `fillerAvailable` — they only
+ * fill the stack when non-filler ✅ alone falls short, and they get bumped
+ * back to alternate the moment a real ✅ would replace them.
+ */
+export async function toggleFiller(args: {
+  sessionId: number;
+  userId: number;
+}): Promise<"on" | "off"> {
+  return withMutex(`session:${args.sessionId}`, async () => {
+    const session = q.getSession(args.sessionId);
+    if (!session || session.archived_at !== null) throw new SessionGone();
+    let next: "on" | "off";
+    if (q.isFiller(args.sessionId, args.userId)) {
+      q.removeFiller(args.sessionId, args.userId);
+      next = "off";
+    } else {
+      q.addFiller(args.sessionId, args.userId);
+      next = "on";
+    }
+    await evaluateAndApply(session);
+    return next;
+  });
+}
+
+/**
  * Re-render and re-evaluate the active session for a chat. Use after any
  * mutation that affects the session view (roster add/remove, /lfp_stacks
  * change, etc.). No-op if no active session.
@@ -380,8 +408,9 @@ function renderSessionMessage(
   const roster = q.getRoster(session.chat_id);
   const rosterIds = new Set(roster.map((r) => r.telegram_user_id));
   const skipIds = q.getSkips(session.id);
+  const fillerIds = q.getFillers(session.id);
   const votes = q.getSessionVotes(session.id);
-  const tallies = tallySlots({ slots, votes, rosterIds, skipIds });
+  const tallies = tallySlots({ slots, votes, rosterIds, skipIds, fillerIds });
   const lock = currentLock(session.id);
   const chat = q.getOrCreateChat(session.chat_id);
   const validStacks = q.parseStacks(chat.valid_stacks);
@@ -400,6 +429,7 @@ function renderSessionMessage(
     lock,
     validStacks,
     skipIds,
+    fillerIds,
     totalSlots: slots.length,
     spectatorCount: spectatorIds.size,
   });
@@ -428,8 +458,9 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   const roster = q.getRoster(session.chat_id);
   const rosterIds = new Set(roster.map((r) => r.telegram_user_id));
   const skipIds = q.getSkips(session.id);
+  const fillerIds = q.getFillers(session.id);
   const votes = q.getSessionVotes(session.id);
-  const tallies = tallySlots({ slots, votes, rosterIds, skipIds });
+  const tallies = tallySlots({ slots, votes, rosterIds, skipIds, fillerIds });
   const validStacks = q.parseStacks(chat.valid_stacks);
   const next = evaluateLock({ tallies, validStacks });
   const prev = currentLock(session.id);

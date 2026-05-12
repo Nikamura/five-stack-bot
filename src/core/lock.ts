@@ -2,17 +2,26 @@ import type { VoteRow, VoteValue } from "../db/types.js";
 
 export interface SlotTally {
   slot: number;
+  /** Non-filler ✅ count (the "actually wants to play" signal). */
   yes: number;
+  /** Non-filler 🤷 count. Filler ✅/🤷 votes are counted in `fillerAvailable`. */
   maybe: number;
   no: number;
   notVoted: number;
-  /** roster user IDs who voted yes on this slot, ordered by vote_at ASC */
+  /**
+   * Filler "I'll play if you need me" availability — any positive response
+   * (✅ or 🤷) from a roster member who toggled filler mode for this session.
+   * These are used to complete a stack when non-filler ✅ alone falls short.
+   */
+  fillerAvailable: number;
+  /** non-filler ✅ voters, ordered by vote_at ASC */
   yesUserIds: number[];
-  /** roster user IDs who voted maybe on this slot, ordered by vote_at ASC */
+  /** non-filler 🤷 voters, ordered by vote_at ASC */
   maybeUserIds: number[];
-  /** roster user IDs who voted no on this slot, ordered by vote_at ASC.
-   *  Includes session-only skips (treated as no for lock evaluation). */
+  /** ❌ voters + session-only skips */
   noUserIds: number[];
+  /** filler users with ✅ or 🤷 on this slot, ordered by vote_at ASC */
+  fillerAvailableUserIds: number[];
 }
 
 export interface LockResult {
@@ -32,14 +41,21 @@ interface TallyArgs {
   rosterIds: Set<number>;
   /** session-only no-shows (from /lfp-skip) — count as ❌ */
   skipIds: Set<number>;
+  /** session-only fillers — ✅/🤷 votes downgrade to "fillerAvailable". */
+  fillerIds: Set<number>;
 }
 
 /**
  * Build per-slot tallies. Only roster member votes count; non-roster votes
  * are tracked separately by the caller for the "spectators" line.
+ *
+ * Filler users (in `fillerIds`) are "I'll play if needed but don't push to
+ * have me." Their ✅ and 🤷 are pooled into `fillerAvailable` rather than
+ * counted as a strict ✅ — that way they only complete the stack when
+ * non-filler ✅ alone falls short. ❌ from a filler is still ❌.
  */
 export function tallySlots(args: TallyArgs): SlotTally[] {
-  const { slots, votes, rosterIds, skipIds } = args;
+  const { slots, votes, rosterIds, skipIds, fillerIds } = args;
 
   // Map: slot -> Map<userId, VoteRow> (latest vote wins, but we only have one per (session,user,slot))
   const bySlotUser = new Map<number, Map<number, VoteRow>>();
@@ -56,9 +72,11 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
     let yes = 0;
     let maybe = 0;
     let no = 0;
+    let fillerAvailable = 0;
     const yesVotes: VoteRow[] = [];
     const maybeVotes: VoteRow[] = [];
     const noVotes: VoteRow[] = [];
+    const fillerVotes: VoteRow[] = [];
     const skippedNo: number[] = [];
     for (const userId of rosterIds) {
       const v = m.get(userId);
@@ -68,6 +86,16 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
         continue;
       }
       if (!v) continue;
+      if (fillerIds.has(userId)) {
+        if (v.value === "yes" || v.value === "maybe") {
+          fillerAvailable += 1;
+          fillerVotes.push(v);
+        } else {
+          no += 1;
+          noVotes.push(v);
+        }
+        continue;
+      }
       if (v.value === "yes") {
         yes += 1;
         yesVotes.push(v);
@@ -82,7 +110,8 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
     yesVotes.sort((a, b) => a.voted_at - b.voted_at);
     maybeVotes.sort((a, b) => a.voted_at - b.voted_at);
     noVotes.sort((a, b) => a.voted_at - b.voted_at);
-    const cast = yes + maybe + no;
+    fillerVotes.sort((a, b) => a.voted_at - b.voted_at);
+    const cast = yes + maybe + no + fillerAvailable;
     const notVoted = rosterIds.size - cast;
     return {
       slot,
@@ -90,9 +119,11 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
       maybe,
       no,
       notVoted,
+      fillerAvailable,
       yesUserIds: yesVotes.map((v) => v.telegram_user_id),
       maybeUserIds: maybeVotes.map((v) => v.telegram_user_id),
       noUserIds: [...noVotes.map((v) => v.telegram_user_id), ...skippedNo],
+      fillerAvailableUserIds: fillerVotes.map((v) => v.telegram_user_id),
     };
   });
 }
@@ -101,14 +132,16 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
  * Evaluate the lock per §5.4.
  *
  * Walks the valid stacks largest-first:
- *  1. If any slot has yes >= currentStack, lock the EARLIEST such slot at currentStack.
- *  2. Else if any slot is still "in play" for the LARGEST stack
- *     (yes + maybe + notVoted >= largestStack), wait — return null.
- *  3. Else fall through to the next-largest stack and repeat.
- *
- * Note: step 2 only blocks fall-back while the LARGEST stack is still possible.
- * Once the largest is impossible, we evaluate the next stack the same way:
- * lock if reachable now, else wait if still in-play, else fall through.
+ *  1. If any slot has yes >= currentStack, lock the EARLIEST such slot at
+ *     currentStack with non-filler ✅ voters as core.
+ *  2. Else if non-filler ✅ + fillerAvailable >= currentStack on any slot,
+ *     lock the EARLIEST such slot using fillers to complete the lineup.
+ *     Real ✅ voters always come first; fillers fill the remaining seats
+ *     by vote-time. A later real ✅ vote will bump the filler back to
+ *     alternate.
+ *  3. Else if the stack is still mathematically possible
+ *     (yes + maybe + fillerAvailable + notVoted >= stack), wait.
+ *  4. Else fall through to the next-smallest stack and repeat.
  */
 export function evaluateLock(args: {
   tallies: SlotTally[];
@@ -118,20 +151,39 @@ export function evaluateLock(args: {
   const stacks = [...validStacks].sort((a, b) => b - a);
 
   for (const stack of stacks) {
-    // Try to lock at this stack: earliest slot with yes >= stack.
-    const earliest = tallies.find((t) => t.yes >= stack);
-    if (earliest) {
-      const core = earliest.yesUserIds.slice(0, stack);
-      const alternates = earliest.yesUserIds.slice(stack);
-      return { slot: earliest.slot, size: stack, core, alternates };
+    // 1. Strict ✅ lock — earliest slot with non-filler yes >= stack.
+    const yesOnly = tallies.find((t) => t.yes >= stack);
+    if (yesOnly) {
+      const core = yesOnly.yesUserIds.slice(0, stack);
+      // Anyone else who said ✅, plus any fillers, are alternates.
+      const alternates = [
+        ...yesOnly.yesUserIds.slice(stack),
+        ...yesOnly.fillerAvailableUserIds,
+      ];
+      return { slot: yesOnly.slot, size: stack, core, alternates };
     }
-    // Else: is this stack still mathematically possible at any slot?
-    const stillInPlay = tallies.some((t) => t.yes + t.maybe + t.notVoted >= stack);
+    // 2. Filler-assisted lock — non-filler ✅ + filler availability >= stack.
+    const withFiller = tallies.find((t) => t.yes + t.fillerAvailable >= stack);
+    if (withFiller) {
+      const ranked = [
+        ...withFiller.yesUserIds,
+        ...withFiller.fillerAvailableUserIds,
+      ];
+      return {
+        slot: withFiller.slot,
+        size: stack,
+        core: ranked.slice(0, stack),
+        alternates: ranked.slice(stack),
+      };
+    }
+    // 3. Still in play? (anyone undecided or maybe could still push it over.)
+    const stillInPlay = tallies.some(
+      (t) => t.yes + t.maybe + t.fillerAvailable + t.notVoted >= stack,
+    );
     if (stillInPlay) {
-      // Wait. Don't fall back to a smaller stack.
       return { slot: null, size: null, core: [], alternates: [] };
     }
-    // Else: this stack is dead. Try the next-smallest.
+    // Else: stack dead. Try the next-smallest.
   }
 
   return { slot: null, size: null, core: [], alternates: [] };
@@ -141,9 +193,10 @@ export function evaluateLock(args: {
  * The largest stack that's currently *reachable* at any slot, ignoring the
  * "wait for the largest possible" rule. Use this to surface a "we could play
  * X-stack at HH:MM right now if nobody more shows up" hint when the actual
- * lock evaluator is still waiting on a bigger stack.
+ * lock evaluator is still waiting on a bigger stack. Includes filler help.
  *
- * Returns null if no slot has enough ✅ votes to clear the smallest valid stack.
+ * Returns null if no slot has enough ✅ votes (even with filler help) to clear
+ * the smallest valid stack.
  */
 export function tentativeLock(args: {
   tallies: SlotTally[];
@@ -151,7 +204,9 @@ export function tentativeLock(args: {
 }): { slot: number; size: number } | null {
   const stacks = [...args.validStacks].sort((a, b) => b - a);
   for (const stack of stacks) {
-    const earliest = args.tallies.find((t) => t.yes >= stack);
+    const earliest = args.tallies.find(
+      (t) => t.yes + t.fillerAvailable >= stack,
+    );
     if (earliest) return { slot: earliest.slot, size: stack };
   }
   return null;

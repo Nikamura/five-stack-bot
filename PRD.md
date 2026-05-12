@@ -35,6 +35,7 @@ The target users are adults with shifting evening schedules. The bot's job is to
 | **Opener** | The user who ran `/lfp`. Auto-added to the roster (if not already in it) and auto-✅'d on every slot. Tap-to-change works exactly like any other voter. |
 | **Lock** | The bot's declaration that a party is forming at a specific slot, with a specific 5/3/2 size and a specific player list. |
 | **Alternate** | A player who voted yes on the locked slot but wasn't in the first 5. Auto-promoted if a locked player drops. |
+| **Filler** | A roster member who toggled "I can fill if needed, but don't feel like playing" for this session. Their ✅ and 🤷 votes are pooled into a `fillerAvailable` bucket — they only complete a stack when real ✅ alone falls short, and they get bumped back to alternate the moment a real ✅ would replace them. ❌ from a filler is still ❌. Filler state is per-session and clears when the session archives. |
 
 ## 5. Functional Requirements
 
@@ -79,6 +80,7 @@ Roster management is keyboard-driven, with typed shortcuts available:
 - The opener is auto-✅'d on every slot when the session is created, on the assumption that the person opening is one of the players. They can flip individual slots to 🤷 or ❌ as needed.
 - Players can change their vote at any time while the session is active.
 - A bulk **"✅ All times work"** button toggles every slot to ✅ in one tap (tap again to clear back to no vote). A bulk **"🚫 I can't play tonight"** button sets all of a player's slots to ❌ in one tap.
+- A bulk **"🛟 I can fill if needed"** button toggles **filler mode** for the tapping user on this session. Filler users' ✅ and 🤷 votes are treated as "play if pushed" (see §5.4) rather than as a strict ✅. The button is a per-user toggle; the toast confirms ON/OFF. Their existing votes stay intact — only the *interpretation* changes.
 - Each hour in the voting keyboard has a compact **`HH-(HH+1)`** combo button next to its two 30-min slots that toggles both halves of the hour at once, following the same ✅ → 🤷 → ❌ cycle as a single slot. Lets a player who's available for a whole hour express it with one tap instead of two.
 - Votes from non-roster chat members are accepted but **don't count toward lock decisions**; they're shown separately as "+N spectators interested" for visibility.
 - Slot-tap callbacks answer immediately (with an optimistic toast like `21:00: ✅`); the message body re-render is debounced ~1s so vote bursts coalesce into a single edit and don't trip Telegram's per-message rate limit.
@@ -87,11 +89,12 @@ Roster management is keyboard-driven, with typed shortcuts available:
 
 The chat has a **valid-stack set**, configurable via `/lfp-stacks` (see §5.7), defaulting to `{5, 3, 2}`. The bot continuously evaluates after every vote change, walking the valid stacks largest-first:
 
-1. **Try the largest enabled stack** (default 5). If any slot has ≥ 5 ✅ votes from roster members, lock the **earliest** such slot at 5-stack.
-2. **Otherwise, is a 5-stack still mathematically possible?** A slot is "still in play for 5-stack" if `(✅ + 🤷 + not-yet-voted)` on that slot is ≥ 5. If any slot is still in play, **wait** — do not lock anything smaller.
-3. **Otherwise, try the next-largest enabled stack** (default 3). Lock the slot with the most ✅ votes (≥ 3) at 3-stack, choosing earliest on tie.
-4. **Otherwise, try 2-stack** by the same rule (≥ 2 ✅).
-5. **Otherwise, no lock** — the bot waits or eventually archives the session unanswered.
+1. **Try the largest enabled stack** (default 5). If any slot has ≥ 5 real ✅ votes (i.e. from non-filler roster members), lock the **earliest** such slot at 5-stack. Fillers who also said ✅/🤷 on that slot become alternates.
+2. **Otherwise, can a filler complete the stack?** If `(real ✅ + fillerAvailable)` reaches the stack size on any slot, lock the earliest such slot with fillers seated in vote-time order behind the real ✅ voters. A later real ✅ vote bumps the filler back to alternate (see "if 6th comes, 6th plays" §4).
+3. **Otherwise, is the stack still mathematically possible?** A slot is "still in play" if `(✅ + 🤷 + fillerAvailable + not-yet-voted)` on that slot is ≥ stack size. If any slot is still in play, **wait** — do not lock anything smaller.
+4. **Otherwise, try the next-largest enabled stack** (default 3), applying steps 1–3 again.
+5. **Otherwise, try 2-stack** by the same rule.
+6. **Otherwise, no lock** — the bot waits or eventually archives the session unanswered.
 
 While no actual lock is in effect, the body shows a **tentative-lock footer** when *any* slot has reached the smallest valid stack: `⏳ Could play 3-stack at 19:00 with Karolis, Tomas, Justas — waiting on more votes for a bigger party.` This makes "we could play right now if nobody else shows up" visible without parsing the table.
 
@@ -317,6 +320,7 @@ Inline keyboard:
   [22:00]  [22:30]  [22-23]
 
   [✅ All times work]  [🚫 I can't play tonight]
+  [🛟 I can fill if needed]
 ```
 
 Each row is one hour: two 30-min slot buttons followed by a `HH-(HH+1)` combo that toggles both halves at once. If the session range covers only one half of a given hour (e.g. a 21:30 start clips the first half of 21:00), only the in-range half is shown for that hour and the combo button is omitted.
@@ -371,6 +375,7 @@ Target environment: a small VPS (Hetzner CX11 or DigitalOcean equivalent, ~€4�
 - `sessions(id, chat_id, opener_user_id, opener_display_name, start_minutes, end_minutes, poll_message_id, game_on_message_id, opened_at, archive_at, archived_at)` — `start_minutes` and `end_minutes` are minutes-from-midnight on the 30-minute grid; `end_minutes = 1440` means midnight.
 - `votes(session_id, telegram_user_id, slot_minutes, value, voted_at)` — `value` ∈ `yes|maybe|no`. `slot_minutes` is minutes-from-midnight in chat-local time.
 - `session_skips(session_id, telegram_user_id)` — session-only no-shows from `/lfp_skip`. Counted as ❌ for lock evaluation only; roster membership is unchanged.
+- `session_fillers(session_id, telegram_user_id, set_at)` — session-only filler flag from the **🛟 I can fill if needed** button. The user's ✅/🤷 on this session goes into the `fillerAvailable` pool instead of the strict-✅ pool; ❌ is unaffected. Cleared on session archive (via cascade) or by tapping the button again.
 - `locks(session_id, slot_minutes, size, locked_at)` — at most one row per session at a time.
 - `lock_party(session_id, telegram_user_id, role, vote_order)` — `role` ∈ `core|alternate`, `core` ordered by vote-time via `vote_order`.
 - `lock_late(session_id, telegram_user_id, late_minutes, set_at)` — per-locked-player "I'll be late" flag. Cleared when the lineup changes or the party dissolves.

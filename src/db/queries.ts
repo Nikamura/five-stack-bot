@@ -284,6 +284,43 @@ export function getSkips(sessionId: number): Set<number> {
   );
 }
 
+// -- Fillers ------------------------------------------------------------------
+
+export function addFiller(sessionId: number, userId: number): void {
+  db.prepare(
+    `INSERT INTO session_fillers (session_id, telegram_user_id, set_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(session_id, telegram_user_id) DO NOTHING`,
+  ).run(sessionId, userId, nowMs());
+}
+
+export function removeFiller(sessionId: number, userId: number): void {
+  db.prepare(
+    "DELETE FROM session_fillers WHERE session_id = ? AND telegram_user_id = ?",
+  ).run(sessionId, userId);
+}
+
+export function isFiller(sessionId: number, userId: number): boolean {
+  const row = db
+    .prepare(
+      "SELECT 1 FROM session_fillers WHERE session_id = ? AND telegram_user_id = ?",
+    )
+    .get(sessionId, userId);
+  return !!row;
+}
+
+export function getFillers(sessionId: number): Set<number> {
+  return new Set(
+    (
+      db
+        .prepare(
+          "SELECT telegram_user_id FROM session_fillers WHERE session_id = ?",
+        )
+        .all(sessionId) as { telegram_user_id: number }[]
+    ).map((r) => r.telegram_user_id),
+  );
+}
+
 // -- Locks --------------------------------------------------------------------
 
 export function getLock(sessionId: number): LockRow | null {
