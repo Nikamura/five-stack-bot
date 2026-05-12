@@ -1,27 +1,27 @@
 // Slot helpers — sessions are divided into 30-minute candidate start times.
+// Session ranges are stored as minutes-from-midnight in chat-local time, on a
+// 30-minute grid. `endMinutes` is exclusive; `1440` means midnight.
 
 export const SLOT_MIN = 30;
+export const DAY_MIN = 1440;
 
 /**
  * Build the slot list for a session, in minutes-from-midnight.
- * Inclusive of `startHour`, exclusive of `endHour`.
- * Hours are in chat-local time. `endHour === 24` means midnight.
+ * Inclusive of `startMinutes`, exclusive of `endMinutes`.
+ * Both bounds must be on the 30-minute grid; `endMinutes === 1440` means midnight.
  */
-export function buildSlots(startHour: number, endHour: number): number[] {
-  if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) {
-    throw new Error("Hours must be numeric");
+export function buildSlots(startMinutes: number, endMinutes: number): number[] {
+  if (!Number.isInteger(startMinutes) || !Number.isInteger(endMinutes)) {
+    throw new Error("Minutes must be integers");
   }
-  // Slot grid is 30 minutes, so endpoints must land on :00 or :30.
-  if ((startHour * 2) % 1 !== 0 || (endHour * 2) % 1 !== 0) {
-    throw new Error("Hours must be on a 30-minute boundary");
+  if (startMinutes % SLOT_MIN !== 0 || endMinutes % SLOT_MIN !== 0) {
+    throw new Error("Minutes must be on the 30-minute grid");
   }
-  if (startHour < 0 || startHour > 23.5) throw new Error("startHour out of range");
-  if (endHour < 0.5 || endHour > 24) throw new Error("endHour out of range");
-  if (endHour <= startHour) throw new Error("endHour must be > startHour");
-  const start = Math.round(startHour * 60);
-  const end = Math.round(endHour * 60);
+  if (startMinutes < 0 || startMinutes >= DAY_MIN) throw new Error("startMinutes out of range");
+  if (endMinutes < SLOT_MIN || endMinutes > DAY_MIN) throw new Error("endMinutes out of range");
+  if (endMinutes <= startMinutes) throw new Error("endMinutes must be > startMinutes");
   const out: number[] = [];
-  for (let m = start; m < end; m += SLOT_MIN) out.push(m);
+  for (let m = startMinutes; m < endMinutes; m += SLOT_MIN) out.push(m);
   return out;
 }
 
@@ -32,11 +32,11 @@ export function formatSlot(minutes: number): string {
 }
 
 /**
- * Parse a single endpoint of a range. Accepted forms:
- *   `HH`         → hour only      (19)
- *   `HH:MM`      → colon notation (19:30, 19:00)
- *   `HHMM`/`HMM` → compact 24h    (1930, 930)
- * Minutes must be `00` or `30` (slot grid is 30 minutes).
+ * Parse a single endpoint of a range to minutes-from-midnight. Accepted forms:
+ *   `HH`         → hour only      (`19`   → 19:00)
+ *   `HH:MM`      → colon notation (`19:30`, `19:00`)
+ *   `HHMM`/`HMM` → compact 24h    (`1930`, `930`)
+ * Minutes must land on the 30-minute grid (`:00` or `:30`).
  */
 function parseTimePoint(s: string): number | null {
   let h: number;
@@ -56,23 +56,24 @@ function parseTimePoint(s: string): number | null {
     return null;
   }
   if (min !== 0 && min !== 30) return null;
-  return h + min / 60;
+  return h * 60 + min;
 }
 
 /**
- * Parse the `<start>-<end>` shortcut. Endpoints accept the forms documented
- * on `parseTimePoint`. Returns null if the input is malformed.
+ * Parse the `<start>-<end>` shortcut. Endpoints accept the forms documented on
+ * `parseTimePoint` (e.g. `18-23`, `18:30-23:00`, `1830-2300`). End == 24 /
+ * `24:00` / `2400` means midnight. Returns null if the input is malformed.
  */
-export function parseRangeArg(arg: string): { startHour: number; endHour: number } | null {
+export function parseRangeArg(arg: string): { startMinutes: number; endMinutes: number } | null {
   const m = arg.trim().match(/^([\d:]+)\s*-\s*([\d:]+)$/);
   if (!m) return null;
-  const startHour = parseTimePoint(m[1]!);
-  const endHour = parseTimePoint(m[2]!);
-  if (startHour === null || endHour === null) return null;
-  if (startHour < 0 || startHour > 23.5) return null;
-  if (endHour < 0.5 || endHour > 24) return null;
-  if (endHour <= startHour) return null;
-  return { startHour, endHour };
+  const startMinutes = parseTimePoint(m[1]!);
+  const endMinutes = parseTimePoint(m[2]!);
+  if (startMinutes === null || endMinutes === null) return null;
+  if (startMinutes < 0 || startMinutes >= DAY_MIN) return null;
+  if (endMinutes < SLOT_MIN || endMinutes > DAY_MIN) return null;
+  if (endMinutes <= startMinutes) return null;
+  return { startMinutes, endMinutes };
 }
 
 /**
@@ -124,18 +125,18 @@ export function parseStacksArg(token: string): number[] | null {
 /**
  * Parse the full /lfp shortcut argument string.
  * Tokens may appear in any order:
- *   - exactly one range token like `18-23`
+ *   - exactly one range token like `18-23`, `18:30-23:00`, or `1830-2300`
  *   - optional stacks token like `[5,3,2]`
  *   - any number of `@username` tokens (passed through as `rest` for the
  *     caller to extract from message entities)
  */
 export function parseLfpArgs(text: string): {
-  range: { startHour: number; endHour: number } | null;
+  range: { startMinutes: number; endMinutes: number } | null;
   stacks: number[] | null;
   rest: string;
 } {
   const tokens = text.trim().split(/\s+/).filter(Boolean);
-  let range: { startHour: number; endHour: number } | null = null;
+  let range: { startMinutes: number; endMinutes: number } | null = null;
   let stacks: number[] | null = null;
   const remaining: string[] = [];
   for (const tok of tokens) {

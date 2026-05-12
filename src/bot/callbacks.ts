@@ -31,10 +31,10 @@ import { nextVote } from "../core/lock.js";
 // ----------------------------------------------------------------------------
 
 bot.callbackQuery(/^lfp:start:(\d+)$/, async (ctx) => {
-  const startHour = Number(ctx.match[1]);
+  const startMinutes = Number(ctx.match[1]);
   ctx.answerCallbackQuery().catch(() => {});
-  await ctx.editMessageText(wizardStep2Text(startHour), {
-    reply_markup: wizardStep2Keyboard(startHour),
+  await ctx.editMessageText(wizardStep2Text(startMinutes, null), {
+    reply_markup: wizardStep2Keyboard(startMinutes, null),
   });
 });
 
@@ -43,24 +43,50 @@ bot.callbackQuery(/^lfp:back:start$/, async (ctx) => {
   await ctx.editMessageText(wizardStep1Text(), { reply_markup: wizardStep1Keyboard() });
 });
 
+// User tapped a slot in step 2 to set the latest playable slot.
+// `slot` is the start-of-slot in minutes; the resulting end is slot+30.
+// Tapping the slot that's already the highlighted last selected shrinks by 30.
 bot.callbackQuery(/^lfp:end:(\d+):(\d+)$/, async (ctx) => {
-  const startHour = Number(ctx.match[1]);
-  const endHour = Number(ctx.match[2]);
+  const startMinutes = Number(ctx.match[1]);
+  const slot = Number(ctx.match[2]);
+  ctx.answerCallbackQuery().catch(() => {});
+
+  const currentEnd = readWizardEndFromKeyboard(ctx, startMinutes);
+  let nextEnd: number | null;
+  if (currentEnd !== null && slot + 30 === currentEnd) {
+    // Tap on the current last slot — shrink by one slot, or clear if that
+    // would land at startMinutes.
+    nextEnd = slot > startMinutes ? slot : null;
+  } else {
+    nextEnd = slot + 30;
+  }
+  try {
+    await ctx.editMessageText(wizardStep2Text(startMinutes, nextEnd), {
+      reply_markup: wizardStep2Keyboard(startMinutes, nextEnd),
+    });
+  } catch {
+    /* ignore — message may already match */
+  }
+});
+
+bot.callbackQuery(/^lfp:done:(\d+):(\d+)$/, async (ctx) => {
+  const startMinutes = Number(ctx.match[1]);
+  const endMinutes = Number(ctx.match[2]);
   if (!ctx.chat) return ctx.answerCallbackQuery();
   ctx.answerCallbackQuery().catch(() => {});
   const chat = q.getOrCreateChat(ctx.chat.id);
   const stacks = q.parseStacks(chat.valid_stacks);
   const rosterSize = q.getRoster(ctx.chat.id).length;
   await ctx.editMessageText(
-    wizardStep3Text({ startHour, endHour, validStacks: stacks, rosterSize }),
-    { reply_markup: wizardStep3Keyboard(startHour, endHour) },
+    wizardStep3Text({ startMinutes, endMinutes, validStacks: stacks, rosterSize }),
+    { reply_markup: wizardStep3Keyboard(startMinutes, endMinutes) },
   );
 });
 
 bot.callbackQuery(/^lfp:open:(\d+):(\d+)$/, async (ctx) => {
   if (!ctx.chat || !ctx.from) return ctx.answerCallbackQuery();
-  const startHour = Number(ctx.match[1]);
-  const endHour = Number(ctx.match[2]);
+  const startMinutes = Number(ctx.match[1]);
+  const endMinutes = Number(ctx.match[2]);
   ctx.answerCallbackQuery({ text: "Opening…" }).catch(() => {});
   try {
     await ctx.editMessageText(wizardOpenedText());
@@ -72,13 +98,31 @@ bot.callbackQuery(/^lfp:open:(\d+):(\d+)$/, async (ctx) => {
     openerUserId: ctx.from.id,
     openerUsername: ctx.from.username ?? null,
     openerDisplayName: senderDisplayName(ctx),
-    startHour,
-    endHour,
+    startMinutes,
+    endMinutes,
   });
   if (typeof result === "object") {
     await ctx.reply("A session is already active.");
   }
 });
+
+/**
+ * Recover the currently-selected end-minute from the live step-2 keyboard.
+ * The Done button carries it as the second capture in its callback_data
+ * (`lfp:done:<start>:<end>`). Returns null if no slot is selected yet.
+ */
+function readWizardEndFromKeyboard(ctx: any, startMinutes: number): number | null {
+  const kb = ctx.callbackQuery?.message?.reply_markup?.inline_keyboard;
+  if (!Array.isArray(kb)) return null;
+  for (const row of kb as any[][]) {
+    for (const btn of row) {
+      const data = String(btn?.callback_data ?? "");
+      const m = data.match(/^lfp:done:(\d+):(\d+)$/);
+      if (m && Number(m[1]) === startMinutes) return Number(m[2]);
+    }
+  }
+  return null;
+}
 
 bot.callbackQuery(/^lfp:wcancel$/, async (ctx) => {
   ctx.answerCallbackQuery().catch(() => {});
@@ -135,6 +179,30 @@ bot.callbackQuery(/^vbn:(\d+)$/, async (ctx) => {
     await session.bulkNoTonight({ sessionId, userId: ctx.from.id });
   } catch (err) {
     log.warn("bulk no failed", err);
+  }
+});
+
+bot.callbackQuery(/^vbay:(\d+)$/, async (ctx) => {
+  if (!ctx.from) return ctx.answerCallbackQuery();
+  const sessionId = Number(ctx.match[1]);
+  // Answer optimistically; the toggle decides the actual state inside the
+  // mutex and we update the toast below if needed.
+  ctx.answerCallbackQuery({ text: "All slots set to ✅." }).catch(() => {});
+  bindSyntheticUsername(ctx);
+  try {
+    const result = await session.bulkYesToggleTonight({
+      sessionId,
+      userId: ctx.from.id,
+    });
+    if (result === "cleared") {
+      // Best-effort follow-up toast — Telegram only honors one answer per
+      // callback, so the user sees whichever shows first. Swallow errors.
+      ctx
+        .answerCallbackQuery({ text: "Cleared all your votes." })
+        .catch(() => {});
+    }
+  } catch (err) {
+    log.warn("bulk yes failed", err);
   }
 });
 

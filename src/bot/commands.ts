@@ -91,7 +91,7 @@ bot.command("lfp", async (ctx) => {
     if (added.length > 0) {
       await ctx.reply(addedReply(added), { parse_mode: "HTML" });
     }
-    await openShortcut(ctx, parsed.range.startHour, parsed.range.endHour);
+    await openShortcut(ctx, parsed.range.startMinutes, parsed.range.endMinutes);
     return;
   }
 
@@ -102,14 +102,14 @@ bot.command("lfp", async (ctx) => {
   await ctx.reply(wizardStep1Text(), { reply_markup: wizardStep1Keyboard() });
 });
 
-async function openShortcut(ctx: Context, startHour: number, endHour: number) {
+async function openShortcut(ctx: Context, startMinutes: number, endMinutes: number) {
   const result = await session.openSession({
     chatId: ctx.chat!.id,
     openerUserId: ctx.from!.id,
     openerUsername: ctx.from!.username ?? null,
     openerDisplayName: senderDisplayName(ctx),
-    startHour,
-    endHour,
+    startMinutes,
+    endMinutes,
   });
   if (typeof result === "object") {
     await ctx.reply(existingSessionText());

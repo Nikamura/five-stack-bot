@@ -20,17 +20,17 @@ export function slotInstantMs(args: {
 
 /**
  * archive_at = min(last-slot-start, next-3am-local).
- * Last slot start = endHour*60 - 30 minutes from local midnight.
+ * Last slot start = endMinutes - 30, i.e. the final 30-min slot in the range.
  * 3 AM = 03:00 the morning after the session date.
  */
 export function computeArchiveAt(args: {
-  endHour: number;
+  endMinutes: number;
   tz: string;
   nowMs: number;
 }): number {
-  const { endHour, tz, nowMs } = args;
+  const { endMinutes, tz, nowMs } = args;
   const lastSlotStart = slotInstantMs({
-    slotMinutes: endHour * 60 - 30,
+    slotMinutes: endMinutes - 30,
     tz,
     nowMs,
   });

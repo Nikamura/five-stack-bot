@@ -21,8 +21,8 @@ export interface SessionRow {
   chat_id: number;
   opener_user_id: number;
   opener_display_name: string;
-  start_hour: number;
-  end_hour: number;
+  start_minutes: number;
+  end_minutes: number;
   poll_message_id: number | null;
   game_on_message_id: number | null;
   opened_at: number;

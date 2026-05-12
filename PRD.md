@@ -42,8 +42,8 @@ The target users are adults with shifting evening schedules. The bot's job is to
 
 A session can be opened two ways:
 
-- **Wizard mode (default for tap users):** `/lfp` with no args replies with an inline keyboard. Step 1 picks the **start hour**; step 2 picks the **end hour** (only hours after the chosen start are offered); step 3 is a confirm screen showing the range and the chat's current stack-priority. This is the primary path on mobile.
-- **Shortcut (power users):** `/lfp 18-23` opens a session immediately for that range, no keyboard. Endpoints accept hour-only (`19`), colon (`19:30`), or compact 24h (`1930`) forms; minutes must be `:00` or `:30` to match the 30-minute slot grid. End hour `24` means midnight. The shortcut also accepts an optional bracketed stacks list and any number of `@mentions` in any order, so `/lfp 18-23 [5,3,2] @karolis @tomas` opens the session, persists the stacks for the chat, and folds the tagged users into the roster — all in one message. This makes "fresh chat → first session" a single command.
+- **Wizard mode (default for tap users):** `/lfp` with no args replies with an inline keyboard. Step 1 picks the **start time** on a 30-minute grid (16:00, 16:30, … 23:30); step 2 picks the **end time** by tapping slots — each tap extends the session by 30 min, the keyboard re-renders with the running range marked ✅, and `[✅ Done]` confirms; step 3 is a confirm screen showing the range and the chat's current stack-priority. This is the primary path on mobile.
+- **Shortcut (power users):** `/lfp 18-23` opens a session immediately for that range, no keyboard. Endpoints accept hour-only (`19`), colon (`19:30`), or compact 24h (`1930`) forms; minutes must be `:00` or `:30` to match the 30-minute slot grid. End `24` / `24:00` / `2400` means midnight. The shortcut also accepts an optional bracketed stacks list and any number of `@mentions` in any order, so `/lfp 18-23 [5,3,2] @karolis @tomas` opens the session, persists the stacks for the chat, and folds the tagged users into the roster — all in one message. This makes "fresh chat → first session" a single command.
 
 Only **one active session per chat**. A second `/lfp` (or `/lfp_bump`) on an active session **bumps the poll**: re-posts the live state as a fresh message at the bottom of the chat, tombstones the old message (`↓ Session moved to a fresh message — vote below.`), and points all future body edits at the new message. Old buttons keep working — the callback handler routes by session id, not message id.
 
@@ -78,7 +78,7 @@ Roster management is keyboard-driven, with typed shortcuts available:
 - Inline buttons let any chat member toggle their vote per slot. Tapping cycles ✅ → 🤷 → ❌ → ✅. There is **no "cleared" stop** in the cycle — once you've voted on a slot you can't return to "no vote yet" via tapping. (Initial state is still "no vote" until the first tap.)
 - The opener is auto-✅'d on every slot when the session is created, on the assumption that the person opening is one of the players. They can flip individual slots to 🤷 or ❌ as needed.
 - Players can change their vote at any time while the session is active.
-- A bulk **"I can't play tonight"** button sets all of a player's slots to ❌ in one tap.
+- A bulk **"✅ All times work"** button toggles every slot to ✅ in one tap (tap again to clear back to no vote). A bulk **"🚫 I can't play tonight"** button sets all of a player's slots to ❌ in one tap.
 - Votes from non-roster chat members are accepted but **don't count toward lock decisions**; they're shown separately as "+N spectators interested" for visibility.
 - Slot-tap callbacks answer immediately (with an optimistic toast like `21:00: ✅`); the message body re-render is debounced ~1s so vote bursts coalesce into a single edit and don't trip Telegram's per-message rate limit.
 
@@ -152,7 +152,7 @@ Most commands work with **no args** (open an inline-keyboard wizard) **or with a
 | Command | What it does | Wizard? |
 |---|---|---|
 | `/lfp` | Open a session via start/end-hour picker. On an active session, **bumps the poll** to the bottom. | ✅ |
-| `/lfp <start>-<end>` | Shortcut: open immediately for that range. | — |
+| `/lfp <start>-<end>` | Shortcut: open immediately for that range. Bounds are on the 30-min grid (`HH` or `HH:MM`). | — |
 | `/lfp <start>-<end> [stacks] @tags…` | Shortcut + override stack priority + add `@tags` to roster, all in one message. Tokens may appear in any order. | — |
 | `/lfp_bump` | Re-post the active poll at the bottom of the chat (alias: `/lfp_show`). | — |
 | `/lfp_cancel` | Cancel the active session (with one-tap confirm). | ✅ |
@@ -169,33 +169,35 @@ Most commands work with **no args** (open an inline-keyboard wizard) **or with a
 
 ### `/lfp` wizard
 
-Step 1 — start hour:
+Step 1 — start time (30-min grid, 16:00 → 23:30):
 
 ```
 🎮 Open a session for tonight. When can the earliest player start?
 
-  [16:00]  [17:00]  [18:00]
-  [19:00]  [20:00]  [21:00]
-  [22:00]  [23:00]
+  [16:00]  [16:30]  [17:00]  [17:30]
+  [18:00]  [18:30]  [19:00]  [19:30]
+  [20:00]  [20:30]  [21:00]  [21:30]
+  [22:00]  [22:30]  [23:00]  [23:30]
 
   [Cancel]
 ```
 
-Step 2 — end hour (only later than chosen start):
+Step 2 — tap how late you'd play. Each tap extends the session by 30 min; selected slots show a ✅ prefix. Tapping the current last slot shrinks back by 30 min. `[✅ Done]` confirms.
 
 ```
-🎮 Start: 18:00. Latest end?
+🎮 Start: 18:30. Until 21:00. Tap more slots to extend, or tap Done.
 
-           [20:00]  [21:00]
-  [22:00]  [23:00]  [24:00]
+  [✅ 18:30]  [✅ 19:00]  [✅ 19:30]  [✅ 20:00]
+  [✅ 20:30]  [21:00]     [21:30]     [22:00]
+  [22:30]     [23:00]     [23:30]
 
-  [◀ Back]  [Cancel]
+  [✅ Done]  [◀ Back]  [Cancel]
 ```
 
 Step 3 — confirm:
 
 ```
-🎮 Open session 18:00–23:00 tonight?
+🎮 Open session 18:30–21:00 tonight?
    Stack priority: 5 → 3 → 2 (skip 4)
    Roster: 6 players
 
@@ -314,7 +316,7 @@ Inline keyboard:
   [21:00]  [21:30]  [22:00]
   [22:30]  [23:00]
 
-  [🚫 I can't play tonight]
+  [✅ All times work]  [🚫 I can't play tonight]
 ```
 
 (No cancel button — only `/lfp_cancel` ends a session, to make tear-down a deliberate command rather than a misclickable button.)
@@ -364,7 +366,7 @@ Target environment: a small VPS (Hetzner CX11 or DigitalOcean equivalent, ~€4�
 
 - `chats(chat_id, tz, valid_stacks, created_at)` — `valid_stacks` is a sorted CSV like `"5,3,2"`, edited via `/lfp_stacks`.
 - `roster_members(chat_id, telegram_user_id, username, display_name, added_at)` — `username` enables `@`-form mentions when available; `telegram_user_id` may be a synthetic negative id derived from the lowercase handle until the user's first interaction binds the real id.
-- `sessions(id, chat_id, opener_user_id, opener_display_name, start_hour, end_hour, poll_message_id, game_on_message_id, opened_at, archive_at, archived_at)`
+- `sessions(id, chat_id, opener_user_id, opener_display_name, start_minutes, end_minutes, poll_message_id, game_on_message_id, opened_at, archive_at, archived_at)` — `start_minutes` and `end_minutes` are minutes-from-midnight on the 30-minute grid; `end_minutes = 1440` means midnight.
 - `votes(session_id, telegram_user_id, slot_minutes, value, voted_at)` — `value` ∈ `yes|maybe|no`. `slot_minutes` is minutes-from-midnight in chat-local time.
 - `session_skips(session_id, telegram_user_id)` — session-only no-shows from `/lfp_skip`. Counted as ❌ for lock evaluation only; roster membership is unchanged.
 - `locks(session_id, slot_minutes, size, locked_at)` — at most one row per session at a time.

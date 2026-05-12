@@ -131,22 +131,22 @@ export function createSession(args: {
   chatId: number;
   openerUserId: number;
   openerDisplayName: string;
-  startHour: number;
-  endHour: number;
+  startMinutes: number;
+  endMinutes: number;
   archiveAt: number;
 }): number {
   const r = db
     .prepare(
       `INSERT INTO sessions
-       (chat_id, opener_user_id, opener_display_name, start_hour, end_hour, opened_at, archive_at)
+       (chat_id, opener_user_id, opener_display_name, start_minutes, end_minutes, opened_at, archive_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       args.chatId,
       args.openerUserId,
       args.openerDisplayName,
-      args.startHour,
-      args.endHour,
+      args.startMinutes,
+      args.endMinutes,
       nowMs(),
       args.archiveAt,
     );
@@ -232,6 +232,38 @@ export function bulkNoForUser(
     for (const s of slots) stmt.run(sessionId, userId, s, now);
   });
   tx();
+}
+
+export function bulkYesForUser(
+  sessionId: number,
+  userId: number,
+  slots: number[],
+): void {
+  const stmt = db.prepare(
+    `INSERT INTO votes (session_id, telegram_user_id, slot_minutes, value, voted_at)
+     VALUES (?, ?, ?, 'yes', ?)
+     ON CONFLICT(session_id, telegram_user_id, slot_minutes)
+     DO UPDATE SET value = 'yes', voted_at = excluded.voted_at`,
+  );
+  const now = nowMs();
+  const tx = db.transaction(() => {
+    for (const s of slots) stmt.run(sessionId, userId, s, now);
+  });
+  tx();
+}
+
+export function clearVotesForUser(sessionId: number, userId: number): void {
+  db.prepare(
+    "DELETE FROM votes WHERE session_id = ? AND telegram_user_id = ?",
+  ).run(sessionId, userId);
+}
+
+export function getUserVotes(sessionId: number, userId: number): VoteRow[] {
+  return db
+    .prepare(
+      "SELECT * FROM votes WHERE session_id = ? AND telegram_user_id = ?",
+    )
+    .all(sessionId, userId) as VoteRow[];
 }
 
 // -- Skips --------------------------------------------------------------------
