@@ -8,14 +8,18 @@ export const SLOT_MIN = 30;
  * Hours are in chat-local time. `endHour === 24` means midnight.
  */
 export function buildSlots(startHour: number, endHour: number): number[] {
-  if (!Number.isInteger(startHour) || !Number.isInteger(endHour)) {
-    throw new Error("Hours must be integers");
+  if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) {
+    throw new Error("Hours must be numeric");
   }
-  if (startHour < 0 || startHour > 23) throw new Error("startHour out of range");
-  if (endHour < 1 || endHour > 24) throw new Error("endHour out of range");
+  // Slot grid is 30 minutes, so endpoints must land on :00 or :30.
+  if ((startHour * 2) % 1 !== 0 || (endHour * 2) % 1 !== 0) {
+    throw new Error("Hours must be on a 30-minute boundary");
+  }
+  if (startHour < 0 || startHour > 23.5) throw new Error("startHour out of range");
+  if (endHour < 0.5 || endHour > 24) throw new Error("endHour out of range");
   if (endHour <= startHour) throw new Error("endHour must be > startHour");
-  const start = startHour * 60;
-  const end = endHour * 60;
+  const start = Math.round(startHour * 60);
+  const end = Math.round(endHour * 60);
   const out: number[] = [];
   for (let m = start; m < end; m += SLOT_MIN) out.push(m);
   return out;
@@ -28,17 +32,45 @@ export function formatSlot(minutes: number): string {
 }
 
 /**
- * Parse the `<start>-<end>` shortcut.
- * Returns null if the input is malformed.
+ * Parse a single endpoint of a range. Accepted forms:
+ *   `HH`         → hour only      (19)
+ *   `HH:MM`      → colon notation (19:30, 19:00)
+ *   `HHMM`/`HMM` → compact 24h    (1930, 930)
+ * Minutes must be `00` or `30` (slot grid is 30 minutes).
+ */
+function parseTimePoint(s: string): number | null {
+  let h: number;
+  let min: number;
+  let m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (m) {
+    h = parseInt(m[1]!, 10);
+    min = parseInt(m[2]!, 10);
+  } else if ((m = s.match(/^(\d{3,4})$/))) {
+    const digits = m[1]!;
+    h = parseInt(digits.slice(0, digits.length - 2), 10);
+    min = parseInt(digits.slice(-2), 10);
+  } else if ((m = s.match(/^(\d{1,2})$/))) {
+    h = parseInt(m[1]!, 10);
+    min = 0;
+  } else {
+    return null;
+  }
+  if (min !== 0 && min !== 30) return null;
+  return h + min / 60;
+}
+
+/**
+ * Parse the `<start>-<end>` shortcut. Endpoints accept the forms documented
+ * on `parseTimePoint`. Returns null if the input is malformed.
  */
 export function parseRangeArg(arg: string): { startHour: number; endHour: number } | null {
-  const m = arg.trim().match(/^(\d{1,2})\s*-\s*(\d{1,2})$/);
+  const m = arg.trim().match(/^([\d:]+)\s*-\s*([\d:]+)$/);
   if (!m) return null;
-  const startHour = parseInt(m[1]!, 10);
-  const endHour = parseInt(m[2]!, 10);
-  if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) return null;
-  if (startHour < 0 || startHour > 23) return null;
-  if (endHour < 1 || endHour > 24) return null;
+  const startHour = parseTimePoint(m[1]!);
+  const endHour = parseTimePoint(m[2]!);
+  if (startHour === null || endHour === null) return null;
+  if (startHour < 0 || startHour > 23.5) return null;
+  if (endHour < 0.5 || endHour > 24) return null;
   if (endHour <= startHour) return null;
   return { startHour, endHour };
 }

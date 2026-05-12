@@ -70,8 +70,9 @@ bot.command("lfp", async (ctx) => {
     if (!parsed.range) {
       await ctx.reply(
         "Couldn't parse a range. Try <code>/lfp 18-23</code>, " +
+          "<code>/lfp 19:30-21</code>, <code>/lfp 1930-21</code>, " +
           "<code>/lfp 18-23 [5,3,2] @karolis @tomas</code>, " +
-          "or <code>/lfp</code> for the picker.",
+          "or <code>/lfp</code> for the picker. Minutes must be :00 or :30.",
         { parse_mode: "HTML" },
       );
       return;
