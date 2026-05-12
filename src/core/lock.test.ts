@@ -16,7 +16,7 @@ describe("tallySlots", () => {
       vote(2, 1080, "yes", 2),
       vote(99, 1080, "yes", 3), // non-roster
     ];
-    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set() });
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
     assert.equal(t[0]!.yes, 2);
     assert.equal(t[0]!.notVoted, 1);
   });
@@ -29,10 +29,46 @@ describe("tallySlots", () => {
       votes: [vote(1, 1080, "yes", 1)],
       rosterIds: roster,
       skipIds: new Set([2]),
+      fillerIds: new Set(),
     });
     assert.equal(t[0]!.yes, 1);
     assert.equal(t[0]!.no, 1); // user 2 (skipped) counts as no
     assert.equal(t[0]!.notVoted, 1); // user 3 has not voted and not skipped
+  });
+
+  it("pools a filler's ✅/🤷 into fillerAvailable, not yes/maybe", () => {
+    const slots = [1080];
+    const roster = new Set([1, 2, 3]);
+    const votes: VoteRow[] = [
+      vote(1, 1080, "yes", 1),
+      vote(2, 1080, "yes", 2),    // filler ✅ → fillerAvailable
+      vote(3, 1080, "maybe", 3),  // filler 🤷 → fillerAvailable
+    ];
+    const t = tallySlots({
+      slots,
+      votes,
+      rosterIds: roster,
+      skipIds: new Set(),
+      fillerIds: new Set([2, 3]),
+    });
+    assert.equal(t[0]!.yes, 1);
+    assert.equal(t[0]!.maybe, 0);
+    assert.equal(t[0]!.fillerAvailable, 2);
+    assert.deepEqual(t[0]!.fillerAvailableUserIds, [2, 3]);
+  });
+
+  it("a filler's ❌ is still a no", () => {
+    const slots = [1080];
+    const roster = new Set([1, 2]);
+    const t = tallySlots({
+      slots,
+      votes: [vote(2, 1080, "no", 1)],
+      rosterIds: roster,
+      skipIds: new Set(),
+      fillerIds: new Set([2]),
+    });
+    assert.equal(t[0]!.no, 1);
+    assert.equal(t[0]!.fillerAvailable, 0);
   });
 });
 
@@ -48,7 +84,7 @@ describe("evaluateLock", () => {
       // and on second too
       ...[1, 2, 3, 4, 5].map((u, i) => vote(u, 1110, "yes", 100 + i)),
     ];
-    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set() });
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
     const r = evaluateLock({ tallies: t, validStacks: stacks });
     assert.equal(r.slot, 1080);
     assert.equal(r.size, 5);
@@ -64,7 +100,7 @@ describe("evaluateLock", () => {
       vote(2, 1080, "yes", 2),
       vote(3, 1080, "yes", 3),
     ];
-    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set() });
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
     const r = evaluateLock({ tallies: t, validStacks: stacks });
     assert.equal(r.slot, null);
     assert.equal(r.size, null);
@@ -81,7 +117,7 @@ describe("evaluateLock", () => {
       vote(4, 1080, "no", 4),
       vote(5, 1080, "no", 5),
     ];
-    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set() });
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
     const r = evaluateLock({ tallies: t, validStacks: stacks });
     assert.equal(r.slot, 1080);
     assert.equal(r.size, 3);
@@ -99,7 +135,7 @@ describe("evaluateLock", () => {
       vote(4, 1080, "yes", 4),
       vote(5, 1080, "no", 5),
     ];
-    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set() });
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
     const r = evaluateLock({ tallies: t, validStacks: stacks });
     assert.equal(r.size, 3);
     assert.deepEqual(r.core, [1, 2, 3]); // first 3 yes voters by vote_at
@@ -122,6 +158,7 @@ describe("evaluateLock", () => {
         votes,
         rosterIds: new Set([10, 20, 30, 40, 50, 60]),
         skipIds: new Set(),
+        fillerIds: new Set(),
       }),
       validStacks: stacks,
     });
@@ -146,9 +183,102 @@ describe("evaluateLock", () => {
       votes,
       rosterIds: roster,
       skipIds: new Set([5]),
+      fillerIds: new Set(),
     });
     const r = evaluateLock({ tallies: t, validStacks: stacks });
     assert.equal(r.size, 3);
+  });
+
+  it("a filler completes a 5-stack when only 4 real ✅ are in", () => {
+    const slots = [1080];
+    const roster = new Set([1, 2, 3, 4, 5]);
+    const votes: VoteRow[] = [
+      vote(1, 1080, "yes", 1),
+      vote(2, 1080, "yes", 2),
+      vote(3, 1080, "yes", 3),
+      vote(4, 1080, "yes", 4),
+      vote(5, 1080, "yes", 5), // filler ✅ → fills the 5th seat
+    ];
+    const t = tallySlots({
+      slots,
+      votes,
+      rosterIds: roster,
+      skipIds: new Set(),
+      fillerIds: new Set([5]),
+    });
+    const r = evaluateLock({ tallies: t, validStacks: stacks });
+    assert.equal(r.size, 5);
+    // Real ✅ voters rank ahead of the filler.
+    assert.deepEqual(r.core, [1, 2, 3, 4, 5]);
+    assert.deepEqual(r.alternates, []);
+  });
+
+  it("a 6th real ✅ bumps the filler out of the locked party", () => {
+    const slots = [1080];
+    const roster = new Set([1, 2, 3, 4, 5, 6]);
+    const votes: VoteRow[] = [
+      vote(1, 1080, "yes", 1),
+      vote(2, 1080, "yes", 2),
+      vote(3, 1080, "yes", 3),
+      vote(4, 1080, "yes", 4),
+      vote(5, 1080, "yes", 5), // filler ✅
+      vote(6, 1080, "yes", 6), // real ✅ arrived after filler
+    ];
+    const t = tallySlots({
+      slots,
+      votes,
+      rosterIds: roster,
+      skipIds: new Set(),
+      fillerIds: new Set([5]),
+    });
+    const r = evaluateLock({ tallies: t, validStacks: stacks });
+    assert.equal(r.size, 5);
+    // 5 real ✅ form the core regardless of vote order, filler is alternate.
+    assert.deepEqual(r.core, [1, 2, 3, 4, 6]);
+    assert.deepEqual(r.alternates, [5]);
+  });
+
+  it("a filler 🤷 also counts toward filler help (treated as 'play if pushed')", () => {
+    const slots = [1080];
+    const roster = new Set([1, 2, 3, 4, 5]);
+    const votes: VoteRow[] = [
+      vote(1, 1080, "yes", 1),
+      vote(2, 1080, "yes", 2),
+      vote(3, 1080, "yes", 3),
+      vote(4, 1080, "yes", 4),
+      vote(5, 1080, "maybe", 5), // filler 🤷 → treated as fillable
+    ];
+    const t = tallySlots({
+      slots,
+      votes,
+      rosterIds: roster,
+      skipIds: new Set(),
+      fillerIds: new Set([5]),
+    });
+    const r = evaluateLock({ tallies: t, validStacks: stacks });
+    assert.equal(r.size, 5);
+    assert.deepEqual(r.core, [1, 2, 3, 4, 5]);
+  });
+
+  it("does not lock if even filler help isn't enough and stack still in play", () => {
+    const slots = [1080];
+    const roster = new Set([1, 2, 3, 4, 5]);
+    // 3 real ✅ + 1 filler 🤷 + 1 not voted. yes+filler = 4 < 5. Still in play.
+    const votes: VoteRow[] = [
+      vote(1, 1080, "yes", 1),
+      vote(2, 1080, "yes", 2),
+      vote(3, 1080, "yes", 3),
+      vote(4, 1080, "maybe", 4),
+    ];
+    const t = tallySlots({
+      slots,
+      votes,
+      rosterIds: roster,
+      skipIds: new Set(),
+      fillerIds: new Set([4]),
+    });
+    const r = evaluateLock({ tallies: t, validStacks: stacks });
+    assert.equal(r.slot, null);
   });
 
   it("locks 2-stack only when nothing larger is possible", () => {
@@ -162,7 +292,7 @@ describe("evaluateLock", () => {
       vote(4, 1080, "no", 4),
       vote(5, 1080, "no", 5),
     ];
-    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set() });
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
     const r = evaluateLock({ tallies: t, validStacks: stacks });
     assert.equal(r.size, 2);
   });
@@ -173,7 +303,7 @@ describe("evaluateLock", () => {
     const votes: VoteRow[] = [
       ...[1, 2, 3, 4, 5].map((u, i) => vote(u, 1080, "no", i + 1)),
     ];
-    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set() });
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
     const r = evaluateLock({ tallies: t, validStacks: stacks });
     assert.equal(r.slot, null);
   });
@@ -204,6 +334,7 @@ describe("tentativeLock", () => {
       ],
       rosterIds: new Set([1, 2, 3, 4, 5]),
       skipIds: new Set(),
+      fillerIds: new Set(),
     });
     const tent = tentativeLock({ tallies: t, validStacks: stacks });
     assert.equal(tent?.size, 3);
@@ -217,6 +348,7 @@ describe("tentativeLock", () => {
       ],
       rosterIds: new Set([1, 2, 3, 4, 5]),
       skipIds: new Set(),
+      fillerIds: new Set(),
     });
     assert.equal(tentativeLock({ tallies: t, validStacks: stacks }), null);
   });

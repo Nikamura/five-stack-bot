@@ -56,6 +56,14 @@ CREATE TABLE IF NOT EXISTS session_skips (
   FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS session_fillers (
+  session_id        INTEGER NOT NULL,
+  telegram_user_id  INTEGER NOT NULL,
+  set_at            INTEGER NOT NULL,
+  PRIMARY KEY (session_id, telegram_user_id),
+  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS locks (
   session_id    INTEGER PRIMARY KEY,
   slot_minutes  INTEGER NOT NULL,

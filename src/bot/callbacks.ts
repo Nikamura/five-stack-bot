@@ -191,6 +191,26 @@ bot.callbackQuery(/^vbay:(\d+)$/, async (ctx) => {
   }
 });
 
+bot.callbackQuery(/^vfill:(\d+)$/, async (ctx) => {
+  if (!ctx.from) return ctx.answerCallbackQuery();
+  const sessionId = Number(ctx.match[1]);
+  bindSyntheticUsername(ctx);
+  try {
+    const state = await session.toggleFiller({
+      sessionId,
+      userId: ctx.from.id,
+    });
+    const text =
+      state === "on"
+        ? "🛟 Filler mode ON — you'll only play if the team is short."
+        : "🛟 Filler mode OFF — your ✅ votes count normally again.";
+    ctx.answerCallbackQuery({ text }).catch(() => {});
+  } catch (err) {
+    log.warn("toggle filler failed", err);
+    ctx.answerCallbackQuery({ text: "Couldn't toggle filler." }).catch(() => {});
+  }
+});
+
 function voteToast(slot: number, next: ReturnType<typeof nextVote>, isRoster: boolean): string {
   const slotStr = formatSlotMm(slot);
   let label: string;

@@ -17,6 +17,7 @@ export function renderSessionBody(args: {
   lock: LockResult | null;
   validStacks: number[];
   skipIds: Set<number>;
+  fillerIds: Set<number>;
   totalSlots: number;
   spectatorCount: number;
 }): string {
@@ -27,6 +28,7 @@ export function renderSessionBody(args: {
     lock,
     validStacks,
     skipIds,
+    fillerIds,
     totalSlots,
     spectatorCount,
   } = args;
@@ -44,30 +46,40 @@ export function renderSessionBody(args: {
   for (const t of tallies) {
     const isLocked = lock && lock.slot === t.slot;
     const tag = isLocked ? `   ← 🔒 ${lock!.size}-stack locked` : hint(t, lock, largestStack);
+    const fillerTag = t.fillerAvailable > 0 ? `   🛟 ${t.fillerAvailable}` : "";
     lines.push(
-      `  ${formatSlot(t.slot)}  ✅ ${t.yes}   🤷 ${t.maybe}   ❌ ${t.no}${tag}`,
+      `  ${formatSlot(t.slot)}  ✅ ${t.yes}   🤷 ${t.maybe}   ❌ ${t.no}${fillerTag}${tag}`,
     );
   }
   lines.push("</pre>");
 
   // Per-voter summary: lists each roster member with their compressed slot
   // ranges. Much more compact than per-row names when most slots agree.
-  const voterLines = voterSummary({ roster, tallies, skipIds, totalSlots });
+  const voterLines = voterSummary({ roster, tallies, skipIds, fillerIds, totalSlots });
   if (voterLines.length > 0) {
     lines.push(...voterLines);
   }
 
-  lines.push("<i>Tap a slot to cycle ✅ → 🤷 → ❌. The HH-HH+1 button toggles the whole hour at once. ✅ All sets every slot to yes; 🚫 sets every slot to no.</i>");
+  lines.push("<i>Tap a slot to cycle ✅ → 🤷 → ❌. The HH-HH+1 button toggles the whole hour at once. ✅ All sets every slot to yes; 🚫 sets every slot to no. 🛟 Filler means \"I'll play only if the team is short.\"</i>");
 
   if (!lock || lock.slot === null) {
     const tentative = tentativeLock({ tallies, validStacks });
     if (tentative) {
       const slotTally = tallies.find((t) => t.slot === tentative.slot);
-      const coreNames = (slotTally?.yesUserIds ?? [])
+      const ranked = [
+        ...(slotTally?.yesUserIds ?? []),
+        ...(slotTally?.fillerAvailableUserIds ?? []),
+      ];
+      const fillerSet = new Set(slotTally?.fillerAvailableUserIds ?? []);
+      const coreNames = ranked
         .slice(0, tentative.size)
-        .map((id) => rosterById.get(id)?.display_name)
+        .map((id) => {
+          const name = rosterById.get(id)?.display_name;
+          if (!name) return null;
+          const escaped = escapeHtml(name);
+          return fillerSet.has(id) ? `${escaped} 🛟` : escaped;
+        })
         .filter((n): n is string => !!n)
-        .map(escapeHtml)
         .join(", ");
       const withClause = coreNames ? ` with ${coreNames}` : "";
       lines.push(
@@ -87,13 +99,15 @@ function voterSummary(args: {
   roster: RosterMember[];
   tallies: SlotTally[];
   skipIds: Set<number>;
+  fillerIds: Set<number>;
   totalSlots: number;
 }): string[] {
-  const { roster, tallies, skipIds, totalSlots } = args;
+  const { roster, tallies, skipIds, fillerIds, totalSlots } = args;
 
   const yesByUser = new Map<number, number[]>();
   const maybeByUser = new Map<number, number[]>();
   const noByUser = new Map<number, number[]>();
+  const fillerByUser = new Map<number, number[]>();
   const push = (m: Map<number, number[]>, uid: number, slot: number) => {
     const arr = m.get(uid);
     if (arr) arr.push(slot);
@@ -102,6 +116,7 @@ function voterSummary(args: {
   for (const t of tallies) {
     for (const uid of t.yesUserIds) push(yesByUser, uid, t.slot);
     for (const uid of t.maybeUserIds) push(maybeByUser, uid, t.slot);
+    for (const uid of t.fillerAvailableUserIds) push(fillerByUser, uid, t.slot);
     for (const uid of t.noUserIds) {
       // Skipped users get a single "(skipped)" entry below; don't repeat
       // them per-slot in the no list.
@@ -118,11 +133,17 @@ function voterSummary(args: {
   const yesEntries: string[] = [];
   const maybeEntries: string[] = [];
   const noEntries: string[] = [];
+  const fillerEntries: string[] = [];
 
   for (const m of roster) {
     if (skipIds.has(m.telegram_user_id)) {
       noEntries.push(`${escapeHtml(m.display_name)} (skipped)`);
       continue;
+    }
+    const isFiller = fillerIds.has(m.telegram_user_id);
+    const filler = fillerByUser.get(m.telegram_user_id);
+    if (isFiller && filler && filler.length > 0) {
+      fillerEntries.push(fmtEntry(m, filler));
     }
     const yes = yesByUser.get(m.telegram_user_id);
     if (yes && yes.length > 0) yesEntries.push(fmtEntry(m, yes));
@@ -135,6 +156,7 @@ function voterSummary(args: {
   const out: string[] = [];
   if (yesEntries.length > 0) out.push(`✅ ${yesEntries.join(", ")}`);
   if (maybeEntries.length > 0) out.push(`🤷 ${maybeEntries.join(", ")}`);
+  if (fillerEntries.length > 0) out.push(`🛟 ${fillerEntries.join(", ")}`);
   if (noEntries.length > 0) out.push(`❌ ${noEntries.join(", ")}`);
   return out;
 }
@@ -143,7 +165,10 @@ function hint(t: SlotTally, lock: LockResult | null, largestStack: number | unde
   if (lock && lock.slot !== null) return "";
   if (typeof largestStack !== "number") return "";
   if (t.yes >= largestStack) return "";
-  if (t.yes + t.maybe + t.notVoted >= largestStack && t.notVoted > 0) {
+  if (
+    t.yes + t.maybe + t.fillerAvailable + t.notVoted >= largestStack &&
+    t.notVoted > 0
+  ) {
     return `   (${largestStack}-stack still possible: ${t.notVoted} not voted)`;
   }
   return "";
@@ -182,7 +207,8 @@ export function renderSessionKeyboard(args: {
     kb.row();
   }
   kb.text("✅ All times work", `vbay:${sessionId}`);
-  kb.text("🚫 I can't play tonight", `vbn:${sessionId}`);
+  kb.text("🚫 I can't play tonight", `vbn:${sessionId}`).row();
+  kb.text("🛟 I can fill if needed", `vfill:${sessionId}`);
   return kb;
 }
 
