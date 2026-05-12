@@ -151,7 +151,10 @@ function hint(t: SlotTally, lock: LockResult | null, largestStack: number | unde
 
 function formatHour(h: number): string {
   // endHour can be 24 (midnight); display as 24:00 to match the PRD UX.
-  return `${String(h).padStart(2, "0")}:00`;
+  // Half-hour endpoints (e.g. 19.5) render as HH:30.
+  const hh = Math.floor(h);
+  const mm = Math.round((h - hh) * 60);
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
 export function renderSessionKeyboard(args: {

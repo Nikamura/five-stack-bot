@@ -21,11 +21,18 @@ describe("buildSlots", () => {
     assert.equal(s.length, 4); // 22:00, 22:30, 23:00, 23:30
     assert.equal(s[s.length - 1], 23 * 60 + 30);
   });
+  it("accepts half-hour endpoints", () => {
+    const s = buildSlots(19.5, 21);
+    assert.equal(s.length, 3); // 19:30, 20:00, 20:30
+    assert.equal(s[0], 19 * 60 + 30);
+    assert.equal(s[s.length - 1], 20 * 60 + 30);
+  });
   it("rejects empty/invalid ranges", () => {
     assert.throws(() => buildSlots(20, 20));
     assert.throws(() => buildSlots(22, 18));
     assert.throws(() => buildSlots(-1, 5));
     assert.throws(() => buildSlots(0, 25));
+    assert.throws(() => buildSlots(19.25, 21));
   });
 });
 
@@ -43,6 +50,20 @@ describe("parseRangeArg", () => {
   });
   it("tolerates whitespace", () => {
     assert.deepEqual(parseRangeArg(" 18 - 23 "), { startHour: 18, endHour: 23 });
+  });
+  it("accepts colon notation with :30", () => {
+    assert.deepEqual(parseRangeArg("19:30-21"), { startHour: 19.5, endHour: 21 });
+    assert.deepEqual(parseRangeArg("19-21:30"), { startHour: 19, endHour: 21.5 });
+    assert.deepEqual(parseRangeArg("19:00-21:00"), { startHour: 19, endHour: 21 });
+  });
+  it("accepts compact HHMM notation", () => {
+    assert.deepEqual(parseRangeArg("1930-21"), { startHour: 19.5, endHour: 21 });
+    assert.deepEqual(parseRangeArg("1900-2130"), { startHour: 19, endHour: 21.5 });
+    assert.deepEqual(parseRangeArg("930-1130"), { startHour: 9.5, endHour: 11.5 });
+  });
+  it("rejects minutes other than :00 or :30", () => {
+    assert.equal(parseRangeArg("19:15-21"), null);
+    assert.equal(parseRangeArg("1945-21"), null);
   });
   it("rejects bad inputs", () => {
     assert.equal(parseRangeArg("18-18"), null);
