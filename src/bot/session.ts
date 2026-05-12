@@ -7,6 +7,7 @@ import { diffLock, evaluateLock, nextVote, tallySlots } from "../core/lock.js";
 import { buildSlots } from "../core/slots.js";
 import {
   renderGameOn,
+  renderGameOnKeyboard,
   renderPartyChanged,
   renderPartyDissolved,
   renderSessionBody,
@@ -384,8 +385,12 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
       core: next.core,
       alternates: next.alternates,
     });
+    // Lineup or slot changed — late flags belong to the old party and don't
+    // carry over. A "new" diff with no prior late state is also a safe clear.
+    if (diff.kind === "changed") q.clearLockLate(session.id);
   } else if (diff.kind === "dissolved") {
     q.clearLock(session.id);
+    q.clearLockLate(session.id);
   }
 
   // Re-render the poll message — debounced. A burst of votes coalesces
@@ -417,18 +422,18 @@ async function postGameOn(args: {
   lock: LockResult;
   roster: RosterMember[];
 }): Promise<void> {
-  const core = mentionByIds(args.roster, args.lock.core);
-  const alts = args.lock.alternates.length
-    ? mentionByIds(args.roster, args.lock.alternates)
-    : "";
+  const lateByUserId = q.getLockLate(args.session.id);
   const text = renderGameOn({
     slot: args.lock.slot!,
     size: args.lock.size!,
-    core,
-    alternates: alts || undefined,
+    coreIds: args.lock.core,
+    alternateIds: args.lock.alternates,
+    roster: args.roster,
+    lateByUserId,
   });
   const sent = await bot.api.sendMessage(args.session.chat_id, text, {
     parse_mode: "HTML",
+    reply_markup: renderGameOnKeyboard(args.session.id),
     link_preview_options: { is_disabled: true },
   });
   q.setSessionGameOnMessage(args.session.id, sent.message_id);
@@ -443,20 +448,50 @@ async function editGameOn(args: {
     await postGameOn(args);
     return;
   }
-  const core = mentionByIds(args.roster, args.lock.core);
-  const alts = args.lock.alternates.length
-    ? mentionByIds(args.roster, args.lock.alternates)
-    : "";
+  const lateByUserId = q.getLockLate(args.session.id);
   const text = renderGameOn({
     slot: args.lock.slot!,
     size: args.lock.size!,
-    core,
-    alternates: alts || undefined,
+    coreIds: args.lock.core,
+    alternateIds: args.lock.alternates,
+    roster: args.roster,
+    lateByUserId,
   });
   await safeEditMessage({
     chatId: args.session.chat_id,
     messageId: args.session.game_on_message_id,
     text,
+    gameOnKeyboard: renderGameOnKeyboard(args.session.id),
+  });
+}
+
+/**
+ * Re-render the GAME ON message in place — used by the "I'll be late" toggle
+ * which mutates lateness but not lock state. No lock evaluation, no debounce.
+ */
+export async function refreshGameOnMessage(sessionId: number): Promise<void> {
+  await withMutex(`session:${sessionId}`, async () => {
+    const session = q.getSession(sessionId);
+    if (!session || session.archived_at !== null) return;
+    if (!session.game_on_message_id) return;
+    const lock = currentLock(sessionId);
+    if (!lock || lock.slot === null) return;
+    const roster = q.getRoster(session.chat_id);
+    const lateByUserId = q.getLockLate(sessionId);
+    const text = renderGameOn({
+      slot: lock.slot,
+      size: lock.size!,
+      coreIds: lock.core,
+      alternateIds: lock.alternates,
+      roster,
+      lateByUserId,
+    });
+    await safeEditMessage({
+      chatId: session.chat_id,
+      messageId: session.game_on_message_id,
+      text,
+      gameOnKeyboard: renderGameOnKeyboard(sessionId),
+    });
   });
 }
 
@@ -558,6 +593,7 @@ interface SafeEditArgs {
   messageId: number;
   text: string;
   keyboard?: ReturnType<typeof renderSessionKeyboard> | null;
+  gameOnKeyboard?: ReturnType<typeof renderGameOnKeyboard> | null;
   clearKeyboard?: boolean;
   suppressKeyboard?: boolean;
 }
@@ -575,7 +611,7 @@ async function safeEditMessage(args: SafeEditArgs): Promise<void> {
       reply_markup:
         args.suppressKeyboard || args.clearKeyboard
           ? undefined
-          : (args.keyboard ?? undefined),
+          : (args.keyboard ?? args.gameOnKeyboard ?? undefined),
       link_preview_options: { is_disabled: true },
     });
   try {

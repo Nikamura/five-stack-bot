@@ -73,6 +73,15 @@ CREATE TABLE IF NOT EXISTS lock_party (
   FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS lock_late (
+  session_id        INTEGER NOT NULL,
+  telegram_user_id  INTEGER NOT NULL,
+  late_minutes      INTEGER NOT NULL,
+  set_at            INTEGER NOT NULL,
+  PRIMARY KEY (session_id, telegram_user_id),
+  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS scheduled_jobs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   fire_at     INTEGER NOT NULL,

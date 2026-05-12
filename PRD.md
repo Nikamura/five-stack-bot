@@ -104,7 +104,7 @@ Because step 2 only releases the lock once every roster member has voted (or vot
 
 When the bot locks a party, it:
 
-1. **Posts a separate "GAME ON" message** in the chat that `@`-mentions every locked player and names the size and time. Example: `🔒 GAME ON 21:00 — 5-stack: @karolis @tomas @mantas @justas @aurimas`. The session poll continues to live next to it.
+1. **Posts a separate "GAME ON" message** in the chat that `@`-mentions every locked player and names the size and time. Example: `🔒 GAME ON 21:00 — 5-stack: @karolis @tomas @mantas @justas @aurimas`. The session poll continues to live next to it. The GAME ON message carries one inline button: **`[⏰ I'll be 15 min late]`**. A locked player tapping it flags themselves as 15 min late and the message edits in place to annotate them (e.g. `@karolis (15 min late)`); tapping again clears the flag. The button is informational only — it does **not** shift the locked slot or the T-15 reminder. Only locked-party players can flag; non-party taps get a toast. Lateness resets automatically when the lineup changes or the party dissolves. The button only exists while a party is locked.
 2. **Schedules a T-15 reminder** that `@`-mentions the locked players 15 minutes before the slot start time. Example: `⏰ 15 min — boot up. @karolis @tomas @mantas @justas @aurimas`.
 3. **Keeps watching for changes.** If anything below happens, it re-runs §5.4:
    - A locked player flips to ❌ or is removed from the roster.
@@ -323,9 +323,11 @@ Inline keyboard:
 
 ```
 🔒 GAME ON 21:00 — 5-stack
-@karolis @tomas @mantas @justas @aurimas
+@karolis @tomas (15 min late) @mantas @justas @aurimas
 
 Alternates: @ignas
+
+  [⏰ I'll be 15 min late]
 ```
 
 ### T-15 reminder
@@ -367,6 +369,7 @@ Target environment: a small VPS (Hetzner CX11 or DigitalOcean equivalent, ~€4�
 - `session_skips(session_id, telegram_user_id)` — session-only no-shows from `/lfp_skip`. Counted as ❌ for lock evaluation only; roster membership is unchanged.
 - `locks(session_id, slot_minutes, size, locked_at)` — at most one row per session at a time.
 - `lock_party(session_id, telegram_user_id, role, vote_order)` — `role` ∈ `core|alternate`, `core` ordered by vote-time via `vote_order`.
+- `lock_late(session_id, telegram_user_id, late_minutes, set_at)` — per-locked-player "I'll be late" flag. Cleared when the lineup changes or the party dissolves.
 - `scheduled_jobs(id, fire_at, kind, payload, created_at)` — `kind` ∈ `archive|t15`. Rehydrated into in-process timers on boot.
 - `audit_log(id, chat_id, telegram_user_id, command, args, at)`
 

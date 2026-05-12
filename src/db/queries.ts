@@ -300,6 +300,52 @@ export function writeLock(args: {
   tx();
 }
 
+// -- Lateness -----------------------------------------------------------------
+
+export function setLockLate(
+  sessionId: number,
+  userId: number,
+  lateMinutes: number,
+): void {
+  db.prepare(
+    `INSERT INTO lock_late (session_id, telegram_user_id, late_minutes, set_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(session_id, telegram_user_id)
+     DO UPDATE SET late_minutes = excluded.late_minutes, set_at = excluded.set_at`,
+  ).run(sessionId, userId, lateMinutes, nowMs());
+}
+
+export function clearLockLateForUser(sessionId: number, userId: number): void {
+  db.prepare(
+    "DELETE FROM lock_late WHERE session_id = ? AND telegram_user_id = ?",
+  ).run(sessionId, userId);
+}
+
+export function clearLockLate(sessionId: number): void {
+  db.prepare("DELETE FROM lock_late WHERE session_id = ?").run(sessionId);
+}
+
+export function getLockLate(sessionId: number): Map<number, number> {
+  const rows = db
+    .prepare(
+      "SELECT telegram_user_id, late_minutes FROM lock_late WHERE session_id = ?",
+    )
+    .all(sessionId) as { telegram_user_id: number; late_minutes: number }[];
+  return new Map(rows.map((r) => [r.telegram_user_id, r.late_minutes]));
+}
+
+export function getLockLateForUser(
+  sessionId: number,
+  userId: number,
+): number | null {
+  const row = db
+    .prepare(
+      "SELECT late_minutes FROM lock_late WHERE session_id = ? AND telegram_user_id = ?",
+    )
+    .get(sessionId, userId) as { late_minutes: number } | undefined;
+  return row?.late_minutes ?? null;
+}
+
 // -- Scheduled jobs -----------------------------------------------------------
 
 export function scheduleJob(kind: string, payload: unknown, fireAt: number): number {

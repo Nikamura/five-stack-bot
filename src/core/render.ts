@@ -3,7 +3,7 @@ import type { LockResult, SlotTally } from "./lock.js";
 import { tentativeLock } from "./lock.js";
 import { compressSlotRanges, formatSlot } from "./slots.js";
 import type { RosterMember, SessionRow } from "../db/types.js";
-import { escapeHtml, mentionList } from "./mention.js";
+import { escapeHtml, mention, mentionList } from "./mention.js";
 import { COMMON_TZS } from "./time.js";
 
 // ============================================================================
@@ -179,17 +179,39 @@ export function renderSessionKeyboard(args: {
 export function renderGameOn(args: {
   slot: number;
   size: number;
-  core: string;
-  alternates?: string;
+  coreIds: number[];
+  alternateIds: number[];
+  roster: RosterMember[];
+  lateByUserId?: Map<number, number>;
 }): string {
+  const map = new Map(args.roster.map((m) => [m.telegram_user_id, m]));
+  const renderCore = (id: number): string => {
+    const m = map.get(id);
+    if (!m) return "";
+    const base = mention(m);
+    const late = args.lateByUserId?.get(id);
+    return late && late > 0 ? `${base} <i>(${late} min late)</i>` : base;
+  };
+  const coreStr = args.coreIds.map(renderCore).filter(Boolean).join(" ");
+  const altStr = args.alternateIds
+    .map((id) => {
+      const m = map.get(id);
+      return m ? mention(m) : "";
+    })
+    .filter(Boolean)
+    .join(" ");
   const lines = [
     `🔒 <b>GAME ON ${formatSlot(args.slot)}</b> — ${args.size}-stack`,
-    args.core,
+    coreStr,
   ];
-  if (args.alternates && args.alternates.length > 0) {
-    lines.push("", `Alternates: ${args.alternates}`);
+  if (altStr.length > 0) {
+    lines.push("", `Alternates: ${altStr}`);
   }
   return lines.join("\n");
+}
+
+export function renderGameOnKeyboard(sessionId: number): InlineKeyboard {
+  return new InlineKeyboard().text("⏰ I'll be 15 min late", `late:${sessionId}`);
 }
 
 export function renderT15(coreMentions: string): string {

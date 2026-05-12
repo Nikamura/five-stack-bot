@@ -194,6 +194,48 @@ bot.callbackQuery(/^xs!:(\d+)$/, async (ctx) => {
 });
 
 // ----------------------------------------------------------------------------
+// Lateness
+// ----------------------------------------------------------------------------
+
+const LATE_MINUTES = 15;
+
+bot.callbackQuery(/^late:(\d+)$/, async (ctx) => {
+  if (!ctx.from) return ctx.answerCallbackQuery();
+  const sessionId = Number(ctx.match[1]);
+  const s = q.getSession(sessionId);
+  if (!s || s.archived_at !== null) {
+    await ctx.answerCallbackQuery({ text: "No active game." });
+    return;
+  }
+  const lock = q.getLock(sessionId);
+  if (!lock) {
+    await ctx.answerCallbackQuery({ text: "No locked party." });
+    return;
+  }
+  const party = q.getLockParty(sessionId);
+  const isCore = party.some(
+    (p) => p.role === "core" && p.telegram_user_id === ctx.from!.id,
+  );
+  if (!isCore) {
+    await ctx.answerCallbackQuery({ text: "Only locked players can flag late." });
+    return;
+  }
+  const existing = q.getLockLateForUser(sessionId, ctx.from.id);
+  if (existing && existing > 0) {
+    q.clearLockLateForUser(sessionId, ctx.from.id);
+    ctx.answerCallbackQuery({ text: "Lateness cleared." }).catch(() => {});
+  } else {
+    q.setLockLate(sessionId, ctx.from.id, LATE_MINUTES);
+    ctx.answerCallbackQuery({ text: `Flagged ${LATE_MINUTES} min late.` }).catch(() => {});
+  }
+  try {
+    await session.refreshGameOnMessage(sessionId);
+  } catch (err) {
+    log.warn("late refresh failed", err);
+  }
+});
+
+// ----------------------------------------------------------------------------
 // Roster
 // ----------------------------------------------------------------------------
 
