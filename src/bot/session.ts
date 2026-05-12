@@ -579,6 +579,25 @@ async function editGameOn(args: {
 }
 
 /**
+ * Re-edit every active session's poll and GAME ON message using the current
+ * render code. Used on boot so deployed message-text changes propagate without
+ * waiting for the next vote or a manual /lfp_bump.
+ */
+export async function refreshAllActiveSessions(): Promise<void> {
+  const sessions = q.listActiveSessions();
+  log.info(`Refreshing ${sessions.length} active session message(s) on boot.`);
+  for (const session of sessions) {
+    try {
+      cancelPendingPollEdit(session.id);
+      await flushPollEdit(session.id);
+      await refreshGameOnMessage(session.id);
+    } catch (err) {
+      log.warn(`Boot refresh failed for session ${session.id}`, err);
+    }
+  }
+}
+
+/**
  * Re-render the GAME ON message in place — used by the "I'll be late" toggle
  * which mutates lateness but not lock state. No lock evaluation, no debounce.
  */
