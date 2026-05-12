@@ -327,6 +327,27 @@ export function getFillers(sessionId: number): Set<number> {
   );
 }
 
+// -- Party mode ---------------------------------------------------------------
+
+export function setPartyMode(sessionId: number, enabled: boolean): void {
+  if (enabled) {
+    db.prepare(
+      `INSERT INTO session_party_mode (session_id, set_at)
+       VALUES (?, ?)
+       ON CONFLICT(session_id) DO NOTHING`,
+    ).run(sessionId, nowMs());
+  } else {
+    db.prepare("DELETE FROM session_party_mode WHERE session_id = ?").run(sessionId);
+  }
+}
+
+export function isPartyMode(sessionId: number): boolean {
+  const row = db
+    .prepare("SELECT 1 FROM session_party_mode WHERE session_id = ?")
+    .get(sessionId);
+  return !!row;
+}
+
 // -- Locks --------------------------------------------------------------------
 
 export function getLock(sessionId: number): LockRow | null {

@@ -84,6 +84,7 @@ Roster management is keyboard-driven, with typed shortcuts available:
 - Each hour in the voting keyboard has a compact **`HH-(HH+1)`** combo button next to its two 30-min slots that toggles both halves of the hour at once, following the same ✅ → 🤷 → ❌ cycle as a single slot. Lets a player who's available for a whole hour express it with one tap instead of two.
 - Votes from non-roster chat members are accepted but **don't count toward lock decisions**; they're shown separately as "+N spectators interested" for visibility.
 - Slot-tap callbacks answer immediately (with an optimistic toast like `21:00: ✅`); the message body re-render is debounced ~1s so vote bursts coalesce into a single edit and don't trip Telegram's per-message rate limit.
+- Slot buttons for times whose start has already passed are hidden from the keyboard — once 19:30 is in the past, the `[19:30]` button (and the `19-20` combo that toggles it) disappears so nobody accidentally votes on a slot no one can start. Tallies and per-voter history for past slots stay in the message body for context.
 
 ### 5.4 Lock logic
 
@@ -108,8 +109,8 @@ Because step 2 only releases the lock once every roster member has voted (or vot
 
 When the bot locks a party, it:
 
-1. **Posts a separate "GAME ON" message** in the chat that `@`-mentions every locked player and names the size and time. Example: `🔒 GAME ON 21:00 — 5-stack: @karolis @tomas @mantas @justas @aurimas`. The session poll continues to live next to it. The GAME ON message carries one inline button: **`[⏰ I'll be 15 min late]`**. A locked player tapping it flags themselves as 15 min late and the message edits in place to annotate them (e.g. `@karolis (15 min late)`); tapping again clears the flag. The button is informational only — it does **not** shift the locked slot or the T-15 reminder. Only locked-party players can flag; non-party taps get a toast. Lateness resets automatically when the lineup changes or the party dissolves. The button only exists while a party is locked.
-2. **Schedules a T-15 reminder** that `@`-mentions the locked players 15 minutes before the slot start time. Example: `⏰ 15 min — boot up. @karolis @tomas @mantas @justas @aurimas`.
+1. **Posts a separate "GAME ON" message** in the chat that `@`-mentions every locked player and names the size and time. Example: `🔒 GAME ON 21:00 — 5-stack: @karolis @tomas @mantas @justas @aurimas`. The session poll continues to live next to it. The GAME ON message carries the **`[⏰ I'll be 15 min late]`** button — a locked player tapping it flags themselves as 15 min late and the message edits in place to annotate them (e.g. `@karolis (15 min late)`); tapping again clears the flag. The button is informational only — it does **not** shift the locked slot or the T-15 reminder. Only locked-party players can flag; non-party taps get a toast. Lateness resets automatically when the lineup changes or the party dissolves. When the locked slot has at least 6 committed players (✅ + 🛟), a second button **`[🎉 Play as 6 (party mode)]`** appears — see §5.5.1. Buttons only exist while a party is locked.
+2. **Schedules a T-15 reminder** that `@`-mentions the locked players 15 minutes before the slot start time. Example: `⏰ 15 min — boot up. @karolis @tomas @mantas @justas @aurimas`. When the lock shifts to a slot that's already inside the 15-min window (e.g. a re-evaluation at 19:28 jumps the party to 19:30), the reminder fires immediately but switches to a shorter `🚀 Load up — game's starting.` headline so the "15 min" wording isn't misleading 2 min before tip-off.
 3. **Keeps watching for changes.** If anything below happens, it re-runs §5.4:
    - A locked player flips to ❌ or is removed from the roster.
    - A new ✅ vote arrives that would upgrade a 3-stack to a 5-stack.
@@ -120,6 +121,12 @@ The GAME ON message includes a **3v3 hint** when at least 6 roster members are w
 If a re-evaluation **changes** the locked party (different size, different time, or different lineup), the bot edits the GAME ON message in place and posts a follow-up `🔄 Party changed: <new state>` so it's visible in the chat scroll. An alternates-only change (e.g. a 6th ✅ slots onto the bench without bumping anyone out of the core) edits GAME ON silently — no follow-up — since the playing lineup hasn't actually moved.
 
 If a re-evaluation **dissolves** the lock entirely (e.g., a 5-stack drop with no alternates and no fall-back trio possible), the bot edits GAME ON to `❌ Party dissolved` and reactivates voting — including releasing the T-15 reminder.
+
+#### 5.5.1 Party mode (6-player custom)
+
+When the locked slot has at least 6 committed players (non-filler ✅ plus filler ✅/🤷 — the same pool that seats `lock_party` rows), the GAME ON message exposes a **`[🎉 Play as 6 (party mode)]`** button. Tapping it flips the session into **party mode**: the lock is rewritten as a 6-stack with all six players in the core, the GAME ON headline becomes `🎉 PARTY MODE HH:MM — 6-stack custom`, and the T-15 reminder pings every six. This is the explicit "we're playing the 3v3-custom hint together" mode — strictly hand-rolled, since flex queue still tops out at 5 — and replaces the passive `💡 N players available` hint while it's on.
+
+A second tap turns party mode back off and the lock falls back to whatever the normal §5.4 evaluator returns (typically 5-stack with the 6th as alternate). If party mode is on and the eligible count later drops below 6 (someone flips to ❌, drops out, or unfillers themselves), the override silently falls back to the normal lock; if 6 are available again, it re-applies on the next re-evaluation. The flag clears on session archive.
 
 ### 5.6 Stats / history
 
@@ -340,14 +347,32 @@ Alternates: @ignas
 💡 6 players available — consider 3v3 Summoner's Rift or ARAM custom so everyone plays.
 
   [⏰ I'll be 15 min late]
+  [🎉 Play as 6 (party mode)]
 ```
 
-The `💡` hint only appears when at least 6 roster members are willing to play the locked slot (✅, 🤷, or 🛟 — see §5.5). With exactly 5 ✅ on the locked slot it's omitted.
+The `💡` hint only appears when at least 6 roster members are willing to play the locked slot (✅, 🤷, or 🛟 — see §5.5). With exactly 5 ✅ on the locked slot it's omitted. The party-mode button only appears when at least 6 *committed* players (✅ + 🛟) are seated for the slot; tapping it flips the lock to a 6-stack custom (§5.5.1).
+
+With party mode ON the message becomes:
+
+```
+🎉 PARTY MODE 21:00 — 6-stack custom
+@karolis @tomas @mantas @justas @aurimas @ignas
+
+  [⏰ I'll be 15 min late]
+  [🎉 Party mode ON — switch back to 5-stack]
+```
 
 ### T-15 reminder
 
 ```
 ⏰ 15 min — boot up.
+@karolis @tomas @mantas @justas @aurimas
+```
+
+If the lock shifts close to start time (less than 10 min before slot tip-off) the reminder fires immediately with a shorter headline so "15 min" isn't misleading:
+
+```
+🚀 Load up — game's starting.
 @karolis @tomas @mantas @justas @aurimas
 ```
 
@@ -382,6 +407,7 @@ Target environment: a small VPS (Hetzner CX11 or DigitalOcean equivalent, ~€4�
 - `votes(session_id, telegram_user_id, slot_minutes, value, voted_at)` — `value` ∈ `yes|maybe|no`. `slot_minutes` is minutes-from-midnight in chat-local time.
 - `session_skips(session_id, telegram_user_id)` — session-only no-shows from `/lfp_skip`. Counted as ❌ for lock evaluation only; roster membership is unchanged.
 - `session_fillers(session_id, telegram_user_id, set_at)` — session-only filler flag from the **🛟 I can fill if needed** button. The user's ✅/🤷 on this session goes into the `fillerAvailable` pool instead of the strict-✅ pool; ❌ is unaffected. Cleared on session archive (via cascade) or by tapping the button again.
+- `session_party_mode(session_id, set_at)` — session-only flag set by the **🎉 Play as 6** button. While present, the lock is rewritten to a 6-stack with all six committed players in the core (§5.5.1). Cleared on session archive (via cascade) or by tapping the button again.
 - `locks(session_id, slot_minutes, size, locked_at)` — at most one row per session at a time.
 - `lock_party(session_id, telegram_user_id, role, vote_order)` — `role` ∈ `core|alternate`, `core` ordered by vote-time via `vote_order`.
 - `lock_late(session_id, telegram_user_id, late_minutes, set_at)` — per-locked-player "I'll be late" flag. Cleared when the lineup changes or the party dissolves.
