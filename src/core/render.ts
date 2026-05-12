@@ -1,6 +1,6 @@
 import { InlineKeyboard } from "grammy";
 import type { LockResult, SlotTally } from "./lock.js";
-import { PARTY_MODE_SIZE, tentativeLock } from "./lock.js";
+import { tentativeLock } from "./lock.js";
 import { compressSlotRanges, formatSlot } from "./slots.js";
 import type { RosterMember, SessionRow } from "../db/types.js";
 import { escapeHtml, mention, mentionList } from "./mention.js";
@@ -232,8 +232,6 @@ export function renderGameOn(args: {
    * 3v3-custom hint so the alternates aren't quietly left out.
    */
   availableAtSlot?: number;
-  /** True when the chat has opted into a 6-player party for this session. */
-  partyMode?: boolean;
 }): string {
   const map = new Map(args.roster.map((m) => [m.telegram_user_id, m]));
   const renderCore = (id: number): string => {
@@ -251,15 +249,14 @@ export function renderGameOn(args: {
     })
     .filter(Boolean)
     .join(" ");
-  const headline = args.partyMode
-    ? `🎉 <b>PARTY MODE ${formatSlot(args.slot)}</b> — ${args.size}-stack custom`
-    : `🔒 <b>GAME ON ${formatSlot(args.slot)}</b> — ${args.size}-stack`;
-  const lines = [headline, coreStr];
+  const lines = [
+    `🔒 <b>GAME ON ${formatSlot(args.slot)}</b> — ${args.size}-stack`,
+    coreStr,
+  ];
   if (altStr.length > 0) {
     lines.push("", `Alternates: ${altStr}`);
   }
   if (
-    !args.partyMode &&
     typeof args.availableAtSlot === "number" &&
     args.availableAtSlot >= THREE_V_THREE_THRESHOLD
   ) {
@@ -271,27 +268,8 @@ export function renderGameOn(args: {
   return lines.join("\n");
 }
 
-export function renderGameOnKeyboard(args: {
-  sessionId: number;
-  partyMode: boolean;
-  partyModeAvailable: boolean;
-}): InlineKeyboard {
-  const kb = new InlineKeyboard().text(
-    "⏰ I'll be 15 min late",
-    `late:${args.sessionId}`,
-  );
-  if (args.partyMode) {
-    kb.row().text(
-      `🎉 Party mode ON — switch back to ${5}-stack`,
-      `party:${args.sessionId}`,
-    );
-  } else if (args.partyModeAvailable) {
-    kb.row().text(
-      `🎉 Play as ${PARTY_MODE_SIZE} (party mode)`,
-      `party:${args.sessionId}`,
-    );
-  }
-  return kb;
+export function renderGameOnKeyboard(sessionId: number): InlineKeyboard {
+  return new InlineKeyboard().text("⏰ I'll be 15 min late", `late:${sessionId}`);
 }
 
 export function renderT15(coreMentions: string): string {

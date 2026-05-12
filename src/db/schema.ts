@@ -64,12 +64,6 @@ CREATE TABLE IF NOT EXISTS session_fillers (
   FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS session_party_mode (
-  session_id  INTEGER PRIMARY KEY,
-  set_at      INTEGER NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS locks (
   session_id    INTEGER PRIMARY KEY,
   slot_minutes  INTEGER NOT NULL,

@@ -189,45 +189,6 @@ export function evaluateLock(args: {
   return { slot: null, size: null, core: [], alternates: [] };
 }
 
-/** Minimum committed players needed at the locked slot for party mode (6v6 custom). */
-export const PARTY_MODE_SIZE = 6;
-
-/**
- * Count of strict-commit (non-filler ✅ + filler ✅/🤷) players at the locked
- * slot. This is the same pool that seats `lock_party` rows, so it's the right
- * number to gate "can we play a 6v6 custom" on — it excludes plain 🤷 from
- * non-fillers since those haven't committed.
- */
-export function partyModeEligibleAtSlot(tally: SlotTally): number {
-  return tally.yesUserIds.length + tally.fillerAvailableUserIds.length;
-}
-
-/**
- * If party mode is on and the locked slot has at least 6 committed players,
- * expand the lock to a 6-stack so the T-15 reminder tags everyone playing.
- * No-op when party mode is off, when no slot is locked, or when fewer than 6
- * are eligible — in those cases we return the input lock unchanged.
- */
-export function applyPartyModeOverride(args: {
-  lock: LockResult;
-  tallies: SlotTally[];
-  partyMode: boolean;
-}): LockResult {
-  const { lock, tallies, partyMode } = args;
-  if (!partyMode || lock.slot === null) return lock;
-  const tally = tallies.find((t) => t.slot === lock.slot);
-  if (!tally) return lock;
-  const eligible = partyModeEligibleAtSlot(tally);
-  if (eligible < PARTY_MODE_SIZE) return lock;
-  const ranked = [...tally.yesUserIds, ...tally.fillerAvailableUserIds];
-  return {
-    slot: lock.slot,
-    size: PARTY_MODE_SIZE,
-    core: ranked.slice(0, PARTY_MODE_SIZE),
-    alternates: ranked.slice(PARTY_MODE_SIZE),
-  };
-}
-
 /**
  * The largest stack that's currently *reachable* at any slot, ignoring the
  * "wait for the largest possible" rule. Use this to surface a "we could play
