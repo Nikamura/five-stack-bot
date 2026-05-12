@@ -29,8 +29,8 @@ export async function openSession(args: {
   openerUserId: number;
   openerUsername: string | null;
   openerDisplayName: string;
-  startHour: number;
-  endHour: number;
+  startMinutes: number;
+  endMinutes: number;
 }): Promise<number | { existingId: number }> {
   q.getOrCreateChat(args.chatId);
   const existing = q.getActiveSession(args.chatId);
@@ -48,7 +48,7 @@ export async function openSession(args: {
 
   const chat = q.getOrCreateChat(args.chatId);
   const archiveAt = computeArchiveAt({
-    endHour: args.endHour,
+    endMinutes: args.endMinutes,
     tz: chat.tz,
     nowMs: Date.now(),
   });
@@ -57,15 +57,15 @@ export async function openSession(args: {
     chatId: args.chatId,
     openerUserId: args.openerUserId,
     openerDisplayName: args.openerDisplayName,
-    startHour: args.startHour,
-    endHour: args.endHour,
+    startMinutes: args.startMinutes,
+    endMinutes: args.endMinutes,
     archiveAt,
   });
 
   // Pre-vote the opener as ✅ on every slot. They opened the session, so the
   // assumption is that they're available — if not, they tap the slots they
   // can't make.
-  const slots = buildSlots(args.startHour, args.endHour);
+  const slots = buildSlots(args.startMinutes, args.endMinutes);
   for (const slot of slots) {
     q.setVote(sessionId, args.openerUserId, slot, "yes");
   }
@@ -190,9 +190,39 @@ export async function bulkNoTonight(args: {
   await withMutex(`session:${args.sessionId}`, async () => {
     const session = q.getSession(args.sessionId);
     if (!session || session.archived_at !== null) throw new SessionGone();
-    const slots = buildSlots(session.start_hour, session.end_hour);
+    const slots = buildSlots(session.start_minutes, session.end_minutes);
     q.bulkNoForUser(args.sessionId, args.userId, slots);
     await evaluateAndApply(session);
+  });
+}
+
+/**
+ * Toggle "all times work" for a user. If every slot is already ✅, clears
+ * the user's votes back to neutral; otherwise sets every slot to ✅.
+ * Returns the resulting state for the optimistic toast.
+ */
+export async function bulkYesToggleTonight(args: {
+  sessionId: number;
+  userId: number;
+}): Promise<"yes-all" | "cleared"> {
+  return withMutex(`session:${args.sessionId}`, async () => {
+    const session = q.getSession(args.sessionId);
+    if (!session || session.archived_at !== null) throw new SessionGone();
+    const slots = buildSlots(session.start_minutes, session.end_minutes);
+    const existing = q.getUserVotes(args.sessionId, args.userId);
+    const allYes =
+      existing.length === slots.length &&
+      existing.every((v) => v.value === "yes");
+    let result: "yes-all" | "cleared";
+    if (allYes) {
+      q.clearVotesForUser(args.sessionId, args.userId);
+      result = "cleared";
+    } else {
+      q.bulkYesForUser(args.sessionId, args.userId, slots);
+      result = "yes-all";
+    }
+    await evaluateAndApply(session);
+    return result;
   });
 }
 
@@ -317,7 +347,7 @@ function renderSessionMessage(
   session: SessionRow,
   opts?: { archivedSuffix?: string },
 ): RenderedMessage {
-  const slots = buildSlots(session.start_hour, session.end_hour);
+  const slots = buildSlots(session.start_minutes, session.end_minutes);
   const roster = q.getRoster(session.chat_id);
   const rosterIds = new Set(roster.map((r) => r.telegram_user_id));
   const skipIds = q.getSkips(session.id);
@@ -365,7 +395,7 @@ function currentLock(sessionId: number): LockResult | null {
 
 async function evaluateAndApply(session: SessionRow): Promise<void> {
   const chat = q.getOrCreateChat(session.chat_id);
-  const slots = buildSlots(session.start_hour, session.end_hour);
+  const slots = buildSlots(session.start_minutes, session.end_minutes);
   const roster = q.getRoster(session.chat_id);
   const rosterIds = new Set(roster.map((r) => r.telegram_user_id));
   const skipIds = q.getSkips(session.id);

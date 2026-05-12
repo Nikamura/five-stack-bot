@@ -1,7 +1,7 @@
 import { InlineKeyboard } from "grammy";
 import type { LockResult, SlotTally } from "./lock.js";
 import { tentativeLock } from "./lock.js";
-import { compressSlotRanges, formatSlot } from "./slots.js";
+import { compressSlotRanges, DAY_MIN, formatSlot, SLOT_MIN } from "./slots.js";
 import type { RosterMember, SessionRow } from "../db/types.js";
 import { escapeHtml, mention, mentionList } from "./mention.js";
 import { COMMON_TZS } from "./time.js";
@@ -31,7 +31,7 @@ export function renderSessionBody(args: {
     spectatorCount,
   } = args;
   const opener = escapeHtml(session.opener_display_name);
-  const range = `${formatHour(session.start_hour)}–${formatHour(session.end_hour)}`;
+  const range = `${formatSlot(session.start_minutes)}–${formatSlot(session.end_minutes)}`;
   const rosterStr = roster.length === 0 ? "<i>(empty)</i>" : mentionList(roster);
   const largestStack = validStacks[0];
   const rosterById = new Map(roster.map((m) => [m.telegram_user_id, m]));
@@ -57,7 +57,7 @@ export function renderSessionBody(args: {
     lines.push(...voterLines);
   }
 
-  lines.push("<i>Tap a slot to cycle ✅ → 🤷 → ❌. 🚫 below sets every slot to ❌.</i>");
+  lines.push("<i>Tap a slot to cycle ✅ → 🤷 → ❌. ✅ All sets every slot to yes; 🚫 sets every slot to no.</i>");
 
   if (!lock || lock.slot === null) {
     const tentative = tentativeLock({ tallies, validStacks });
@@ -149,14 +149,6 @@ function hint(t: SlotTally, lock: LockResult | null, largestStack: number | unde
   return "";
 }
 
-function formatHour(h: number): string {
-  // endHour can be 24 (midnight); display as 24:00 to match the PRD UX.
-  // Half-hour endpoints (e.g. 19.5) render as HH:30.
-  const hh = Math.floor(h);
-  const mm = Math.round((h - hh) * 60);
-  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
-}
-
 export function renderSessionKeyboard(args: {
   sessionId: number;
   slots: number[];
@@ -171,6 +163,7 @@ export function renderSessionKeyboard(args: {
     if (i % perRow === 0) kb.row();
   }
   if (i % perRow !== 0) kb.row();
+  kb.text("✅ All times work", `vbay:${sessionId}`);
   kb.text("🚫 I can't play tonight", `vbn:${sessionId}`);
   return kb;
 }
@@ -233,7 +226,9 @@ export function renderPartyDissolved(): string {
 // /lfp wizard
 // ============================================================================
 
-const WIZARD_HOURS = [16, 17, 18, 19, 20, 21, 22, 23];
+// Wizard start-time options: 16:00 → 23:30 in 30-min increments.
+const WIZARD_START_FIRST = 16 * 60;
+const WIZARD_START_LAST = 23 * 60 + 30;
 
 export function wizardStep1Text(): string {
   return "🎮 Open a session for tonight. When can the earliest player start?";
@@ -242,39 +237,58 @@ export function wizardStep1Text(): string {
 export function wizardStep1Keyboard(): InlineKeyboard {
   const kb = new InlineKeyboard();
   let i = 0;
-  for (const h of WIZARD_HOURS) {
-    kb.text(`${h}:00`, `lfp:start:${h}`);
+  for (let m = WIZARD_START_FIRST; m <= WIZARD_START_LAST; m += SLOT_MIN) {
+    kb.text(formatSlot(m), `lfp:start:${m}`);
     i += 1;
-    if (i % 3 === 0) kb.row();
+    if (i % 4 === 0) kb.row();
   }
-  if (i % 3 !== 0) kb.row();
+  if (i % 4 !== 0) kb.row();
   kb.text("Cancel", "lfp:wcancel");
   return kb;
 }
 
-export function wizardStep2Text(startHour: number): string {
-  return `🎮 Start: ${formatHour(startHour)}. Latest end?`;
+export function wizardStep2Text(startMinutes: number, endMinutes: number | null): string {
+  const head = `🎮 Start: ${formatSlot(startMinutes)}.`;
+  if (endMinutes === null) {
+    return `${head} Tap how late you'd play — pick the latest slot you can join, or tap more to extend.`;
+  }
+  return `${head} Until ${formatSlot(endMinutes)}. Tap more slots to extend, or tap Done.`;
 }
 
-export function wizardStep2Keyboard(startHour: number): InlineKeyboard {
+/**
+ * Step 2 keyboard. The user taps a slot to set the latest end time; the bot
+ * re-renders with all slots from start to that pick marked ✅. Tapping a
+ * later slot extends; tapping the current "last selected" shrinks by 30 min.
+ *
+ * `endMinutes` is the currently-chosen exclusive end (null = nothing selected
+ * yet; user must tap at least once before Done is enabled).
+ */
+export function wizardStep2Keyboard(
+  startMinutes: number,
+  endMinutes: number | null,
+): InlineKeyboard {
   const kb = new InlineKeyboard();
-  // End hour options: any hour > startHour, up to 24 (midnight).
-  const ends: number[] = [];
-  for (let h = startHour + 1; h <= 24; h += 1) ends.push(h);
   let i = 0;
-  for (const h of ends) {
-    kb.text(formatHour(h), `lfp:end:${startHour}:${h}`);
+  // Slot buttons represent 30-min slots from startMinutes to 23:30. Tapping
+  // slot M sets endMinutes to M+30 (i.e. "play through this slot").
+  for (let m = startMinutes; m < DAY_MIN; m += SLOT_MIN) {
+    const selected = endMinutes !== null && m < endMinutes;
+    const label = selected ? `✅ ${formatSlot(m)}` : formatSlot(m);
+    kb.text(label, `lfp:end:${startMinutes}:${m}`);
     i += 1;
-    if (i % 3 === 0) kb.row();
+    if (i % 4 === 0) kb.row();
   }
-  if (i % 3 !== 0) kb.row();
+  if (i % 4 !== 0) kb.row();
+  if (endMinutes !== null) {
+    kb.text("✅ Done", `lfp:done:${startMinutes}:${endMinutes}`);
+  }
   kb.text("◀ Back", "lfp:back:start").text("Cancel", "lfp:wcancel");
   return kb;
 }
 
 export function wizardStep3Text(args: {
-  startHour: number;
-  endHour: number;
+  startMinutes: number;
+  endMinutes: number;
   validStacks: number[];
   rosterSize: number;
 }): string {
@@ -282,15 +296,15 @@ export function wizardStep3Text(args: {
   const skipped = [5, 4, 3, 2].filter((s) => !args.validStacks.includes(s));
   const skipStr = skipped.length ? ` (skip ${skipped.join(",")})` : "";
   return [
-    `🎮 Open session ${formatHour(args.startHour)}–${formatHour(args.endHour)} tonight?`,
+    `🎮 Open session ${formatSlot(args.startMinutes)}–${formatSlot(args.endMinutes)} tonight?`,
     `   Stack priority: ${stackLine}${skipStr}`,
     `   Roster: ${args.rosterSize} player${args.rosterSize === 1 ? "" : "s"}`,
   ].join("\n");
 }
 
-export function wizardStep3Keyboard(startHour: number, endHour: number): InlineKeyboard {
+export function wizardStep3Keyboard(startMinutes: number, endMinutes: number): InlineKeyboard {
   return new InlineKeyboard()
-    .text("✅ Open session", `lfp:open:${startHour}:${endHour}`)
+    .text("✅ Open session", `lfp:open:${startMinutes}:${endMinutes}`)
     .text("Cancel", "lfp:wcancel");
 }
 
