@@ -387,4 +387,20 @@ describe("diffLock", () => {
     );
     assert.equal(d.kind, "unchanged");
   });
+
+  it("flags alternates-only change (e.g. a 6th ✅ after a 5-stack lock)", () => {
+    const d = diffLock(
+      { slot: 1080, size: 5, core: [1, 2, 3, 4, 5], alternates: [] },
+      { slot: 1080, size: 5, core: [1, 2, 3, 4, 5], alternates: [6] },
+    );
+    assert.equal(d.kind, "alternates-changed");
+  });
+
+  it("does NOT classify alternate add as a core change", () => {
+    const d = diffLock(
+      { slot: 1080, size: 5, core: [1, 2, 3, 4, 5], alternates: [6] },
+      { slot: 1080, size: 5, core: [1, 2, 3, 4, 5], alternates: [6, 7] },
+    );
+    assert.equal(d.kind, "alternates-changed");
+  });
 });

@@ -2,7 +2,7 @@ import { GrammyError } from "grammy";
 import { bot } from "./instance.js";
 import { withMutex } from "./mutex.js";
 import * as q from "../db/queries.js";
-import type { LockResult } from "../core/lock.js";
+import type { LockResult, SlotTally } from "../core/lock.js";
 import { diffLock, evaluateLock, nextVote, tallySlots } from "../core/lock.js";
 import { buildSlots } from "../core/slots.js";
 import {
@@ -465,9 +465,15 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   const next = evaluateLock({ tallies, validStacks });
   const prev = currentLock(session.id);
   const diff = diffLock(prev, next);
+  const availableAtSlot =
+    next.slot !== null ? availableAtSlotFromTallies(tallies, next.slot) : 0;
 
   // Persist new lock state.
-  if (diff.kind === "new" || diff.kind === "changed") {
+  if (
+    diff.kind === "new" ||
+    diff.kind === "changed" ||
+    diff.kind === "alternates-changed"
+  ) {
     q.writeLock({
       sessionId: session.id,
       slot: next.slot!,
@@ -477,6 +483,7 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
     });
     // Lineup or slot changed — late flags belong to the old party and don't
     // carry over. A "new" diff with no prior late state is also a safe clear.
+    // An alternates-only change keeps the same core, so late flags stay.
     if (diff.kind === "changed") q.clearLockLate(session.id);
   } else if (diff.kind === "dissolved") {
     q.clearLock(session.id);
@@ -492,14 +499,20 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
 
   // Side effects per diff.
   if (diff.kind === "new") {
-    await postGameOn({ session, lock: next, roster });
+    await postGameOn({ session, lock: next, roster, availableAtSlot });
     await scheduleT15ForLock({ session, lock: next, tz: chat.tz });
   } else if (diff.kind === "changed") {
-    await editGameOn({ session, lock: next, roster });
+    await editGameOn({ session, lock: next, roster, availableAtSlot });
     await postChangedFollowup({ session, prev: diff.prev, next, roster });
     cancelT15(session.id);
     q.deleteJobsForSession(session.id, "t15");
     await scheduleT15ForLock({ session, lock: next, tz: chat.tz });
+  } else if (diff.kind === "alternates-changed") {
+    // Core lineup unchanged — refresh GAME ON in place so the alternates
+    // list and the "X players available" suggestion stay current, but
+    // skip the `🔄 Party changed` follow-up and the T-15 reschedule
+    // since the playing party hasn't moved.
+    await editGameOn({ session, lock: next, roster, availableAtSlot });
   } else if (diff.kind === "dissolved") {
     await editGameOnDissolved({ session });
     cancelT15(session.id);
@@ -507,10 +520,17 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   }
 }
 
+function availableAtSlotFromTallies(tallies: SlotTally[], slot: number): number {
+  const t = tallies.find((x) => x.slot === slot);
+  if (!t) return 0;
+  return t.yes + t.maybe + t.fillerAvailable;
+}
+
 async function postGameOn(args: {
   session: SessionRow;
   lock: LockResult;
   roster: RosterMember[];
+  availableAtSlot: number;
 }): Promise<void> {
   const lateByUserId = q.getLockLate(args.session.id);
   const text = renderGameOn({
@@ -520,6 +540,7 @@ async function postGameOn(args: {
     alternateIds: args.lock.alternates,
     roster: args.roster,
     lateByUserId,
+    availableAtSlot: args.availableAtSlot,
   });
   const sent = await bot.api.sendMessage(args.session.chat_id, text, {
     parse_mode: "HTML",
@@ -533,6 +554,7 @@ async function editGameOn(args: {
   session: SessionRow;
   lock: LockResult;
   roster: RosterMember[];
+  availableAtSlot: number;
 }): Promise<void> {
   if (!args.session.game_on_message_id) {
     await postGameOn(args);
@@ -546,6 +568,7 @@ async function editGameOn(args: {
     alternateIds: args.lock.alternates,
     roster: args.roster,
     lateByUserId,
+    availableAtSlot: args.availableAtSlot,
   });
   await safeEditMessage({
     chatId: args.session.chat_id,
@@ -568,6 +591,13 @@ export async function refreshGameOnMessage(sessionId: number): Promise<void> {
     if (!lock || lock.slot === null) return;
     const roster = q.getRoster(session.chat_id);
     const lateByUserId = q.getLockLate(sessionId);
+    const slots = buildSlots(session.start_minutes, session.end_minutes);
+    const rosterIds = new Set(roster.map((r) => r.telegram_user_id));
+    const skipIds = q.getSkips(sessionId);
+    const fillerIds = q.getFillers(sessionId);
+    const votes = q.getSessionVotes(sessionId);
+    const tallies = tallySlots({ slots, votes, rosterIds, skipIds, fillerIds });
+    const availableAtSlot = availableAtSlotFromTallies(tallies, lock.slot);
     const text = renderGameOn({
       slot: lock.slot,
       size: lock.size!,
@@ -575,6 +605,7 @@ export async function refreshGameOnMessage(sessionId: number): Promise<void> {
       alternateIds: lock.alternates,
       roster,
       lateByUserId,
+      availableAtSlot,
     });
     await safeEditMessage({
       chatId: session.chat_id,

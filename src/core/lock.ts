@@ -214,11 +214,18 @@ export function tentativeLock(args: {
 
 /**
  * Diff two lock results — returns the kind of change for caller side effects.
+ *
+ * `alternates-changed` covers the post-lock case where the core lineup is
+ * stable but a new ✅/🛟 vote pushes someone onto (or off) the alternates
+ * list. The bot persists the new alternates and re-renders GAME ON so the
+ * "X players available" suggestion stays accurate, but suppresses the
+ * `🔄 Party changed` follow-up since the playing lineup hasn't moved.
  */
 export type LockDiff =
   | { kind: "unchanged" }
   | { kind: "new"; next: LockResult }
   | { kind: "changed"; prev: LockResult; next: LockResult; lineupChanged: boolean }
+  | { kind: "alternates-changed"; prev: LockResult; next: LockResult }
   | { kind: "dissolved"; prev: LockResult };
 
 export function diffLock(prev: LockResult | null, next: LockResult): LockDiff {
@@ -230,7 +237,8 @@ export function diffLock(prev: LockResult | null, next: LockResult): LockDiff {
   // both locked
   const p = prev!;
   if (p.slot === next.slot && p.size === next.size && sameIds(p.core, next.core)) {
-    return { kind: "unchanged" };
+    if (sameIds(p.alternates, next.alternates)) return { kind: "unchanged" };
+    return { kind: "alternates-changed", prev: p, next };
   }
   const lineupChanged =
     p.slot === next.slot && p.size === next.size && !sameIds(p.core, next.core);
