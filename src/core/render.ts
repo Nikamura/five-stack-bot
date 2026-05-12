@@ -216,6 +216,9 @@ export function renderSessionKeyboard(args: {
 // GAME ON / T-15 / changes
 // ============================================================================
 
+/** Threshold at which we suggest 3v3 — six players is one full custom-game lineup. */
+export const THREE_V_THREE_THRESHOLD = 6;
+
 export function renderGameOn(args: {
   slot: number;
   size: number;
@@ -223,6 +226,12 @@ export function renderGameOn(args: {
   alternateIds: number[];
   roster: RosterMember[];
   lateByUserId?: Map<number, number>;
+  /**
+   * Count of roster members willing to play this slot (✅ + 🤷 + 🛟). When
+   * this hits {@link THREE_V_THREE_THRESHOLD} we add an "everyone plays"
+   * 3v3-custom hint so the alternates aren't quietly left out.
+   */
+  availableAtSlot?: number;
 }): string {
   const map = new Map(args.roster.map((m) => [m.telegram_user_id, m]));
   const renderCore = (id: number): string => {
@@ -246,6 +255,15 @@ export function renderGameOn(args: {
   ];
   if (altStr.length > 0) {
     lines.push("", `Alternates: ${altStr}`);
+  }
+  if (
+    typeof args.availableAtSlot === "number" &&
+    args.availableAtSlot >= THREE_V_THREE_THRESHOLD
+  ) {
+    lines.push(
+      "",
+      `💡 <b>${args.availableAtSlot} players available</b> — consider 3v3 Summoner's Rift or ARAM custom so everyone plays.`,
+    );
   }
   return lines.join("\n");
 }

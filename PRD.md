@@ -115,7 +115,9 @@ When the bot locks a party, it:
    - A new ✅ vote arrives that would upgrade a 3-stack to a 5-stack.
    - An alternate's ✅ stays standing while a locked player drops — the alternate is promoted, and the bot edits the GAME ON message to reflect the new lineup.
 
-If a re-evaluation **changes** the locked party (different size, different time, or different lineup), the bot edits the GAME ON message in place and posts a follow-up `🔄 Party changed: <new state>` so it's visible in the chat scroll.
+The GAME ON message includes a **3v3 hint** when at least 6 roster members are willing to play the locked slot (counting ✅, 🤷, and 🛟 filler availability): `💡 6 players available — consider 3v3 Summoner's Rift or ARAM custom so everyone plays.` 5-stack flex queue only seats 5; a custom 3v3 (SR or ARAM) lets all 6 friends play together. The hint counts maybes and fillers because the spec is "we could play 3v3 if this person shows up" — strict-✅ commitment isn't required to surface the option. Post-lock, the hint is refreshed in place whenever the alternates list changes (a new ✅/🛟 vote slots a 6th onto the bench, a filler toggles on, or a locked player drops with someone behind them). A standalone 🤷 against the locked slot doesn't re-trigger GAME ON since maybes aren't alternates, but the poll body still reflects it.
+
+If a re-evaluation **changes** the locked party (different size, different time, or different lineup), the bot edits the GAME ON message in place and posts a follow-up `🔄 Party changed: <new state>` so it's visible in the chat scroll. An alternates-only change (e.g. a 6th ✅ slots onto the bench without bumping anyone out of the core) edits GAME ON silently — no follow-up — since the playing lineup hasn't actually moved.
 
 If a re-evaluation **dissolves** the lock entirely (e.g., a 5-stack drop with no alternates and no fall-back trio possible), the bot edits GAME ON to `❌ Party dissolved` and reactivates voting — including releasing the T-15 reminder.
 
@@ -335,8 +337,12 @@ Each row is one hour: two 30-min slot buttons followed by a `HH-(HH+1)` combo th
 
 Alternates: @ignas
 
+💡 6 players available — consider 3v3 Summoner's Rift or ARAM custom so everyone plays.
+
   [⏰ I'll be 15 min late]
 ```
+
+The `💡` hint only appears when at least 6 roster members are willing to play the locked slot (✅, 🤷, or 🛟 — see §5.5). With exactly 5 ✅ on the locked slot it's omitted.
 
 ### T-15 reminder
 
