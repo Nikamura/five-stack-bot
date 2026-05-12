@@ -33,8 +33,8 @@ import { nextVote } from "../core/lock.js";
 bot.callbackQuery(/^lfp:start:(\d+)$/, async (ctx) => {
   const startMinutes = Number(ctx.match[1]);
   ctx.answerCallbackQuery().catch(() => {});
-  await ctx.editMessageText(wizardStep2Text(startMinutes, null), {
-    reply_markup: wizardStep2Keyboard(startMinutes, null),
+  await ctx.editMessageText(wizardStep2Text(startMinutes), {
+    reply_markup: wizardStep2Keyboard(startMinutes),
   });
 });
 
@@ -43,33 +43,7 @@ bot.callbackQuery(/^lfp:back:start$/, async (ctx) => {
   await ctx.editMessageText(wizardStep1Text(), { reply_markup: wizardStep1Keyboard() });
 });
 
-// User tapped a slot in step 2 to set the latest playable slot.
-// `slot` is the start-of-slot in minutes; the resulting end is slot+30.
-// Tapping the slot that's already the highlighted last selected shrinks by 30.
 bot.callbackQuery(/^lfp:end:(\d+):(\d+)$/, async (ctx) => {
-  const startMinutes = Number(ctx.match[1]);
-  const slot = Number(ctx.match[2]);
-  ctx.answerCallbackQuery().catch(() => {});
-
-  const currentEnd = readWizardEndFromKeyboard(ctx, startMinutes);
-  let nextEnd: number | null;
-  if (currentEnd !== null && slot + 30 === currentEnd) {
-    // Tap on the current last slot — shrink by one slot, or clear if that
-    // would land at startMinutes.
-    nextEnd = slot > startMinutes ? slot : null;
-  } else {
-    nextEnd = slot + 30;
-  }
-  try {
-    await ctx.editMessageText(wizardStep2Text(startMinutes, nextEnd), {
-      reply_markup: wizardStep2Keyboard(startMinutes, nextEnd),
-    });
-  } catch {
-    /* ignore — message may already match */
-  }
-});
-
-bot.callbackQuery(/^lfp:done:(\d+):(\d+)$/, async (ctx) => {
   const startMinutes = Number(ctx.match[1]);
   const endMinutes = Number(ctx.match[2]);
   if (!ctx.chat) return ctx.answerCallbackQuery();
@@ -105,24 +79,6 @@ bot.callbackQuery(/^lfp:open:(\d+):(\d+)$/, async (ctx) => {
     await ctx.reply("A session is already active.");
   }
 });
-
-/**
- * Recover the currently-selected end-minute from the live step-2 keyboard.
- * The Done button carries it as the second capture in its callback_data
- * (`lfp:done:<start>:<end>`). Returns null if no slot is selected yet.
- */
-function readWizardEndFromKeyboard(ctx: any, startMinutes: number): number | null {
-  const kb = ctx.callbackQuery?.message?.reply_markup?.inline_keyboard;
-  if (!Array.isArray(kb)) return null;
-  for (const row of kb as any[][]) {
-    for (const btn of row) {
-      const data = String(btn?.callback_data ?? "");
-      const m = data.match(/^lfp:done:(\d+):(\d+)$/);
-      if (m && Number(m[1]) === startMinutes) return Number(m[2]);
-    }
-  }
-  return null;
-}
 
 bot.callbackQuery(/^lfp:wcancel$/, async (ctx) => {
   ctx.answerCallbackQuery().catch(() => {});
@@ -170,6 +126,35 @@ bot.callbackQuery(/^v:(\d+):(\d+)$/, async (ctx) => {
   }
 });
 
+bot.callbackQuery(/^v2:(\d+):(\d+)$/, async (ctx) => {
+  if (!ctx.from) return ctx.answerCallbackQuery();
+  const sessionId = Number(ctx.match[1]);
+  const slot = Number(ctx.match[2]);
+
+  // Optimistic toast — same shape as single-slot, but spans both halves.
+  const cur = q.getVote(sessionId, ctx.from.id, slot)?.value ?? null;
+  const predicted = nextVote(cur);
+  const rosterIds = ctx.chat ? q.getRosterIds(ctx.chat.id) : new Set<number>();
+  const willCountForLock = rosterIds.has(ctx.from.id) || rosterIds.has(syntheticIdFor(ctx));
+  ctx.answerCallbackQuery({ text: comboVoteToast(slot, predicted, willCountForLock) }).catch(() => {
+    /* best-effort */
+  });
+
+  bindSyntheticUsername(ctx);
+
+  try {
+    await session.recordComboVote({
+      sessionId,
+      userId: ctx.from.id,
+      username: ctx.from.username ?? null,
+      displayName: senderDisplayName(ctx),
+      slot,
+    });
+  } catch (err) {
+    log.warn("combo vote failed", err);
+  }
+});
+
 bot.callbackQuery(/^vbn:(\d+)$/, async (ctx) => {
   if (!ctx.from) return ctx.answerCallbackQuery();
   const sessionId = Number(ctx.match[1]);
@@ -212,6 +197,16 @@ function voteToast(slot: number, next: ReturnType<typeof nextVote>, isRoster: bo
   if (next === "yes") label = `${slotStr}: ✅`;
   else if (next === "maybe") label = `${slotStr}: 🤷`;
   else label = `${slotStr}: ❌`;
+  if (!isRoster) label += " (spectator — doesn't affect lock)";
+  return label;
+}
+
+function comboVoteToast(slot: number, next: ReturnType<typeof nextVote>, isRoster: boolean): string {
+  const h = Math.floor(slot / 60);
+  let label: string;
+  if (next === "yes") label = `${h}-${h + 1}: ✅`;
+  else if (next === "maybe") label = `${h}-${h + 1}: 🤷`;
+  else label = `${h}-${h + 1}: ❌`;
   if (!isRoster) label += " (spectator — doesn't affect lock)";
   return label;
 }

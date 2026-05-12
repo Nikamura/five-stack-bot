@@ -183,6 +183,35 @@ export async function recordVote(args: {
   });
 }
 
+/**
+ * Combo vote: toggle a pair of adjacent 30-min slots in the same hour as a
+ * single unit. Cycles ✅ → 🤷 → ❌ → ✅ off the *earlier* slot's current
+ * value, then applies that next value to both slots so they always end up
+ * in sync after a combo tap.
+ */
+export async function recordComboVote(args: {
+  sessionId: number;
+  userId: number;
+  username: string | null;
+  displayName: string;
+  slot: number;
+}): Promise<{ newValue: "yes" | "maybe" | "no"; isRoster: boolean }> {
+  return withMutex(`session:${args.sessionId}`, async () => {
+    const session = q.getSession(args.sessionId);
+    if (!session || session.archived_at !== null) {
+      throw new SessionGone();
+    }
+    const current = q.getVote(args.sessionId, args.userId, args.slot);
+    const next = nextVote(current?.value ?? null);
+    q.setVote(args.sessionId, args.userId, args.slot, next);
+    q.setVote(args.sessionId, args.userId, args.slot + 30, next);
+    const rosterIds = q.getRosterIds(session.chat_id);
+    const isRoster = rosterIds.has(args.userId);
+    await evaluateAndApply(session);
+    return { newValue: next, isRoster };
+  });
+}
+
 export async function bulkNoTonight(args: {
   sessionId: number;
   userId: number;

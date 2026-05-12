@@ -42,7 +42,7 @@ The target users are adults with shifting evening schedules. The bot's job is to
 
 A session can be opened two ways:
 
-- **Wizard mode (default for tap users):** `/lfp` with no args replies with an inline keyboard. Step 1 picks the **start time** on a 30-minute grid (16:00, 16:30, … 23:30); step 2 picks the **end time** by tapping slots — each tap extends the session by 30 min, the keyboard re-renders with the running range marked ✅, and `[✅ Done]` confirms; step 3 is a confirm screen showing the range and the chat's current stack-priority. This is the primary path on mobile.
+- **Wizard mode (default for tap users):** `/lfp` with no args replies with an inline keyboard. Step 1 picks the **start hour**; step 2 picks the **end hour** (only hours after the chosen start are offered); step 3 is a confirm screen showing the range and the chat's current stack-priority. Scrim setup intentionally stays hour-only — the flexibility for individual half-hour availability lives in the voting keyboard. This is the primary path on mobile.
 - **Shortcut (power users):** `/lfp 18-23` opens a session immediately for that range, no keyboard. Endpoints accept hour-only (`19`), colon (`19:30`), or compact 24h (`1930`) forms; minutes must be `:00` or `:30` to match the 30-minute slot grid. End `24` / `24:00` / `2400` means midnight. The shortcut also accepts an optional bracketed stacks list and any number of `@mentions` in any order, so `/lfp 18-23 [5,3,2] @karolis @tomas` opens the session, persists the stacks for the chat, and folds the tagged users into the roster — all in one message. This makes "fresh chat → first session" a single command.
 
 Only **one active session per chat**. A second `/lfp` (or `/lfp_bump`) on an active session **bumps the poll**: re-posts the live state as a fresh message at the bottom of the chat, tombstones the old message (`↓ Session moved to a fresh message — vote below.`), and points all future body edits at the new message. Old buttons keep working — the callback handler routes by session id, not message id.
@@ -79,6 +79,7 @@ Roster management is keyboard-driven, with typed shortcuts available:
 - The opener is auto-✅'d on every slot when the session is created, on the assumption that the person opening is one of the players. They can flip individual slots to 🤷 or ❌ as needed.
 - Players can change their vote at any time while the session is active.
 - A bulk **"✅ All times work"** button toggles every slot to ✅ in one tap (tap again to clear back to no vote). A bulk **"🚫 I can't play tonight"** button sets all of a player's slots to ❌ in one tap.
+- Each hour in the voting keyboard has a compact **`HH-(HH+1)`** combo button next to its two 30-min slots that toggles both halves of the hour at once, following the same ✅ → 🤷 → ❌ cycle as a single slot. Lets a player who's available for a whole hour express it with one tap instead of two.
 - Votes from non-roster chat members are accepted but **don't count toward lock decisions**; they're shown separately as "+N spectators interested" for visibility.
 - Slot-tap callbacks answer immediately (with an optimistic toast like `21:00: ✅`); the message body re-render is debounced ~1s so vote bursts coalesce into a single edit and don't trip Telegram's per-message rate limit.
 
@@ -169,35 +170,33 @@ Most commands work with **no args** (open an inline-keyboard wizard) **or with a
 
 ### `/lfp` wizard
 
-Step 1 — start time (30-min grid, 16:00 → 23:30):
+Step 1 — start hour:
 
 ```
 🎮 Open a session for tonight. When can the earliest player start?
 
-  [16:00]  [16:30]  [17:00]  [17:30]
-  [18:00]  [18:30]  [19:00]  [19:30]
-  [20:00]  [20:30]  [21:00]  [21:30]
-  [22:00]  [22:30]  [23:00]  [23:30]
+  [16:00]  [17:00]  [18:00]
+  [19:00]  [20:00]  [21:00]
+  [22:00]  [23:00]
 
   [Cancel]
 ```
 
-Step 2 — tap how late you'd play. Each tap extends the session by 30 min; selected slots show a ✅ prefix. Tapping the current last slot shrinks back by 30 min. `[✅ Done]` confirms.
+Step 2 — end hour (only later than chosen start):
 
 ```
-🎮 Start: 18:30. Until 21:00. Tap more slots to extend, or tap Done.
+🎮 Start: 18:00. Latest end?
 
-  [✅ 18:30]  [✅ 19:00]  [✅ 19:30]  [✅ 20:00]
-  [✅ 20:30]  [21:00]     [21:30]     [22:00]
-  [22:30]     [23:00]     [23:30]
+           [20:00]  [21:00]
+  [22:00]  [23:00]  [24:00]
 
-  [✅ Done]  [◀ Back]  [Cancel]
+  [◀ Back]  [Cancel]
 ```
 
 Step 3 — confirm:
 
 ```
-🎮 Open session 18:30–21:00 tonight?
+🎮 Open session 18:00–23:00 tonight?
    Stack priority: 5 → 3 → 2 (skip 4)
    Roster: 6 players
 
@@ -311,13 +310,16 @@ Tap a slot to cycle ✅ → 🤷 → ❌. 🚫 below sets every slot to ❌.
 Inline keyboard:
 
 ```
-  [18:00]  [18:30]  [19:00]
-  [19:30]  [20:00]  [20:30]
-  [21:00]  [21:30]  [22:00]
-  [22:30]  [23:00]
+  [18:00]  [18:30]  [18-19]
+  [19:00]  [19:30]  [19-20]
+  [20:00]  [20:30]  [20-21]
+  [21:00]  [21:30]  [21-22]
+  [22:00]  [22:30]  [22-23]
 
   [✅ All times work]  [🚫 I can't play tonight]
 ```
+
+Each row is one hour: two 30-min slot buttons followed by a `HH-(HH+1)` combo that toggles both halves at once. If the session range covers only one half of a given hour (e.g. a 21:30 start clips the first half of 21:00), only the in-range half is shown for that hour and the combo button is omitted.
 
 (No cancel button — only `/lfp_cancel` ends a session, to make tear-down a deliberate command rather than a misclickable button.)
 
