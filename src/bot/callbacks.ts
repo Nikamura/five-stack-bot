@@ -277,25 +277,6 @@ bot.callbackQuery(/^xs!:(\d+)$/, async (ctx) => {
 });
 
 // ----------------------------------------------------------------------------
-// Party mode (6-player custom)
-// ----------------------------------------------------------------------------
-
-bot.callbackQuery(/^party:(\d+)$/, async (ctx) => {
-  const sessionId = Number(ctx.match[1]);
-  try {
-    const state = await session.togglePartyMode({ sessionId });
-    let text: string;
-    if (state === "on") text = "🎉 Party mode ON — playing as 6.";
-    else if (state === "off") text = "Party mode OFF — back to normal stack.";
-    else text = "Need 6 committed players at the locked slot first.";
-    ctx.answerCallbackQuery({ text }).catch(() => {});
-  } catch (err) {
-    log.warn("party mode toggle failed", err);
-    ctx.answerCallbackQuery({ text: "Couldn't toggle party mode." }).catch(() => {});
-  }
-});
-
-// ----------------------------------------------------------------------------
 // Lateness
 // ----------------------------------------------------------------------------
 

@@ -3,15 +3,7 @@ import { bot } from "./instance.js";
 import { withMutex } from "./mutex.js";
 import * as q from "../db/queries.js";
 import type { LockResult, SlotTally } from "../core/lock.js";
-import {
-  applyPartyModeOverride,
-  diffLock,
-  evaluateLock,
-  nextVote,
-  PARTY_MODE_SIZE,
-  partyModeEligibleAtSlot,
-  tallySlots,
-} from "../core/lock.js";
+import { diffLock, evaluateLock, nextVote, tallySlots } from "../core/lock.js";
 import { buildSlots } from "../core/slots.js";
 import {
   renderGameOn,
@@ -306,43 +298,6 @@ export async function toggleFiller(args: {
 }
 
 /**
- * Toggle 6-player party mode for the session. When ON and the locked slot
- * has at least {@link PARTY_MODE_SIZE} committed players (✅ + 🛟), the lock
- * expands to a 6-stack so the T-15 reminder pings all six.
- *
- * Returns the resulting state. Rejects (returns "blocked") if turning ON
- * isn't possible right now — no lock or fewer than 6 committed at the slot.
- */
-export async function togglePartyMode(args: {
-  sessionId: number;
-}): Promise<"on" | "off" | "blocked"> {
-  return withMutex(`session:${args.sessionId}`, async () => {
-    const session = q.getSession(args.sessionId);
-    if (!session || session.archived_at !== null) throw new SessionGone();
-    if (q.isPartyMode(args.sessionId)) {
-      q.setPartyMode(args.sessionId, false);
-      await evaluateAndApply(session);
-      return "off";
-    }
-    // Only allow turning ON when the current lock actually has 6+ committed.
-    // Otherwise the toggle would silently no-op, which is confusing.
-    const { tallies, lock } = computeLockInputs(session);
-    if (
-      !lock ||
-      lock.slot === null ||
-      partyModeEligibleAtSlot(
-        tallies.find((t) => t.slot === lock.slot)!,
-      ) < PARTY_MODE_SIZE
-    ) {
-      return "blocked";
-    }
-    q.setPartyMode(args.sessionId, true);
-    await evaluateAndApply(session);
-    return "on";
-  });
-}
-
-/**
  * Re-render and re-evaluate the active session for a chat. Use after any
  * mutation that affects the session view (roster add/remove, /lfp_stacks
  * change, etc.). No-op if no active session.
@@ -447,20 +402,6 @@ interface RenderedMessage {
   keyboard: ReturnType<typeof renderSessionKeyboard>;
 }
 
-function computeLockInputs(session: SessionRow): {
-  tallies: SlotTally[];
-  lock: LockResult | null;
-} {
-  const slots = buildSlots(session.start_minutes, session.end_minutes);
-  const roster = q.getRoster(session.chat_id);
-  const rosterIds = new Set(roster.map((r) => r.telegram_user_id));
-  const skipIds = q.getSkips(session.id);
-  const fillerIds = q.getFillers(session.id);
-  const votes = q.getSessionVotes(session.id);
-  const tallies = tallySlots({ slots, votes, rosterIds, skipIds, fillerIds });
-  return { tallies, lock: currentLock(session.id) };
-}
-
 function renderSessionMessage(
   session: SessionRow,
   opts?: { archivedSuffix?: string },
@@ -537,25 +478,11 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   const votes = q.getSessionVotes(session.id);
   const tallies = tallySlots({ slots, votes, rosterIds, skipIds, fillerIds });
   const validStacks = q.parseStacks(chat.valid_stacks);
-  const partyMode = q.isPartyMode(session.id);
-  const rawNext = evaluateLock({ tallies, validStacks });
-  // Party mode is layered on top of the normal lock — when on and the locked
-  // slot has 6+ committed players, expand to a 6-stack so the T-15 tags
-  // everyone. If party mode can't apply right now (no lock, or <6 eligible),
-  // the override falls through and we use the normal lock.
-  const next = applyPartyModeOverride({
-    lock: rawNext,
-    tallies,
-    partyMode,
-  });
+  const next = evaluateLock({ tallies, validStacks });
   const prev = currentLock(session.id);
   const diff = diffLock(prev, next);
   const availableAtSlot =
     next.slot !== null ? availableAtSlotFromTallies(tallies, next.slot) : 0;
-  const partyEligible =
-    next.slot !== null
-      ? partyModeEligibleAtSlot(tallies.find((t) => t.slot === next.slot)!)
-      : 0;
 
   // Persist new lock state.
   if (
@@ -587,19 +514,11 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   }
 
   // Side effects per diff.
-  const gameOnArgs = {
-    session,
-    lock: next,
-    roster,
-    availableAtSlot,
-    partyMode,
-    partyEligible,
-  };
   if (diff.kind === "new") {
-    await postGameOn(gameOnArgs);
+    await postGameOn({ session, lock: next, roster, availableAtSlot });
     await scheduleT15ForLock({ session, lock: next, tz: chat.tz });
   } else if (diff.kind === "changed") {
-    await editGameOn(gameOnArgs);
+    await editGameOn({ session, lock: next, roster, availableAtSlot });
     await postChangedFollowup({ session, prev: diff.prev, next, roster });
     cancelT15(session.id);
     q.deleteJobsForSession(session.id, "t15");
@@ -609,7 +528,7 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
     // list and the "X players available" suggestion stay current, but
     // skip the `🔄 Party changed` follow-up and the T-15 reschedule
     // since the playing party hasn't moved.
-    await editGameOn(gameOnArgs);
+    await editGameOn({ session, lock: next, roster, availableAtSlot });
   } else if (diff.kind === "dissolved") {
     await editGameOnDissolved({ session });
     cancelT15(session.id);
@@ -628,8 +547,6 @@ async function postGameOn(args: {
   lock: LockResult;
   roster: RosterMember[];
   availableAtSlot: number;
-  partyMode: boolean;
-  partyEligible: number;
 }): Promise<void> {
   const lateByUserId = q.getLockLate(args.session.id);
   const text = renderGameOn({
@@ -640,15 +557,10 @@ async function postGameOn(args: {
     roster: args.roster,
     lateByUserId,
     availableAtSlot: args.availableAtSlot,
-    partyMode: args.partyMode,
   });
   const sent = await bot.api.sendMessage(args.session.chat_id, text, {
     parse_mode: "HTML",
-    reply_markup: renderGameOnKeyboard({
-      sessionId: args.session.id,
-      partyMode: args.partyMode,
-      partyModeAvailable: args.partyEligible >= PARTY_MODE_SIZE,
-    }),
+    reply_markup: renderGameOnKeyboard(args.session.id),
     link_preview_options: { is_disabled: true },
   });
   q.setSessionGameOnMessage(args.session.id, sent.message_id);
@@ -659,8 +571,6 @@ async function editGameOn(args: {
   lock: LockResult;
   roster: RosterMember[];
   availableAtSlot: number;
-  partyMode: boolean;
-  partyEligible: number;
 }): Promise<void> {
   if (!args.session.game_on_message_id) {
     await postGameOn(args);
@@ -675,17 +585,12 @@ async function editGameOn(args: {
     roster: args.roster,
     lateByUserId,
     availableAtSlot: args.availableAtSlot,
-    partyMode: args.partyMode,
   });
   await safeEditMessage({
     chatId: args.session.chat_id,
     messageId: args.session.game_on_message_id,
     text,
-    gameOnKeyboard: renderGameOnKeyboard({
-      sessionId: args.session.id,
-      partyMode: args.partyMode,
-      partyModeAvailable: args.partyEligible >= PARTY_MODE_SIZE,
-    }),
+    gameOnKeyboard: renderGameOnKeyboard(args.session.id),
   });
 }
 
@@ -728,10 +633,6 @@ export async function refreshGameOnMessage(sessionId: number): Promise<void> {
     const votes = q.getSessionVotes(sessionId);
     const tallies = tallySlots({ slots, votes, rosterIds, skipIds, fillerIds });
     const availableAtSlot = availableAtSlotFromTallies(tallies, lock.slot);
-    const partyMode = q.isPartyMode(sessionId);
-    const partyEligible = partyModeEligibleAtSlot(
-      tallies.find((t) => t.slot === lock.slot)!,
-    );
     const text = renderGameOn({
       slot: lock.slot,
       size: lock.size!,
@@ -740,17 +641,12 @@ export async function refreshGameOnMessage(sessionId: number): Promise<void> {
       roster,
       lateByUserId,
       availableAtSlot,
-      partyMode,
     });
     await safeEditMessage({
       chatId: session.chat_id,
       messageId: session.game_on_message_id,
       text,
-      gameOnKeyboard: renderGameOnKeyboard({
-        sessionId,
-        partyMode,
-        partyModeAvailable: partyEligible >= PARTY_MODE_SIZE,
-      }),
+      gameOnKeyboard: renderGameOnKeyboard(sessionId),
     });
   });
 }
