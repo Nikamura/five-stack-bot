@@ -120,6 +120,12 @@ export function getActiveSession(chatId: number): SessionRow | null {
   );
 }
 
+export function listActiveSessions(): SessionRow[] {
+  return db
+    .prepare("SELECT * FROM sessions WHERE archived_at IS NULL ORDER BY opened_at ASC")
+    .all() as SessionRow[];
+}
+
 export function getSession(id: number): SessionRow | null {
   return (
     (db.prepare("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | undefined) ??

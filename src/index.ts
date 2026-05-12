@@ -5,6 +5,7 @@ import { bot } from "./bot/instance.js";
 import "./bot/commands.js";
 import "./bot/callbacks.js";
 import { rehydrateJobs } from "./scheduler/jobs.js";
+import { refreshAllActiveSessions } from "./bot/session.js";
 
 setLogLevel(config.logLevel);
 
@@ -15,6 +16,10 @@ bot.catch((err) => {
 async function main() {
   // Re-arm scheduled jobs that survived a restart.
   await rehydrateJobs();
+
+  // Re-edit active session messages so deploy-time render changes show up
+  // without waiting for the next vote or a manual /lfp_bump.
+  await refreshAllActiveSessions();
 
   // Set the bot command menu so Telegram users see it in the / picker.
   await bot.api.setMyCommands([
