@@ -1,7 +1,7 @@
 import { InlineKeyboard } from "grammy";
 import type { LockResult, SlotTally } from "./lock.js";
 import { tentativeLock } from "./lock.js";
-import { compressSlotRanges, DAY_MIN, formatSlot, SLOT_MIN } from "./slots.js";
+import { compressSlotRanges, formatSlot } from "./slots.js";
 import type { RosterMember, SessionRow } from "../db/types.js";
 import { escapeHtml, mention, mentionList } from "./mention.js";
 import { COMMON_TZS } from "./time.js";
@@ -57,7 +57,7 @@ export function renderSessionBody(args: {
     lines.push(...voterLines);
   }
 
-  lines.push("<i>Tap a slot to cycle ✅ → 🤷 → ❌. ✅ All sets every slot to yes; 🚫 sets every slot to no.</i>");
+  lines.push("<i>Tap a slot to cycle ✅ → 🤷 → ❌. The HH-HH+1 button toggles the whole hour at once. ✅ All sets every slot to yes; 🚫 sets every slot to no.</i>");
 
   if (!lock || lock.slot === null) {
     const tentative = tentativeLock({ tallies, validStacks });
@@ -149,20 +149,38 @@ function hint(t: SlotTally, lock: LockResult | null, largestStack: number | unde
   return "";
 }
 
+/**
+ * Lay out one row per hour. For each hour H covered by the session, show:
+ *   `[H:00]  [H:30]  [H-(H+1)]`
+ * The first two cast a vote on a single 30-min slot. The third is a combo
+ * that toggles both 30-min slots in the hour at once, so a player who's
+ * available for the full hour can express that with one tap.
+ *
+ * If the session range only includes one of the two half-slots in a given
+ * hour (e.g. a 21:30–22:30 session covers [21:30] and [22:00], but only the
+ * second half of 21:00 and only the first half of 22:00), the combo button
+ * is omitted for that hour — there's no second slot to toggle.
+ */
 export function renderSessionKeyboard(args: {
   sessionId: number;
   slots: number[];
-  perRow?: number;
 }): InlineKeyboard {
-  const { sessionId, slots, perRow = 3 } = args;
+  const { sessionId, slots } = args;
   const kb = new InlineKeyboard();
-  let i = 0;
-  for (const s of slots) {
-    kb.text(formatSlot(s), `v:${sessionId}:${s}`);
-    i += 1;
-    if (i % perRow === 0) kb.row();
+  const slotSet = new Set(slots);
+  const hours = new Set<number>();
+  for (const s of slots) hours.add(Math.floor(s / 60));
+  const sortedHours = [...hours].sort((a, b) => a - b);
+  for (const h of sortedHours) {
+    const a = h * 60;
+    const b = h * 60 + 30;
+    const hasA = slotSet.has(a);
+    const hasB = slotSet.has(b);
+    if (hasA) kb.text(formatSlot(a), `v:${sessionId}:${a}`);
+    if (hasB) kb.text(formatSlot(b), `v:${sessionId}:${b}`);
+    if (hasA && hasB) kb.text(`${h}-${h + 1}`, `v2:${sessionId}:${a}`);
+    kb.row();
   }
-  if (i % perRow !== 0) kb.row();
   kb.text("✅ All times work", `vbay:${sessionId}`);
   kb.text("🚫 I can't play tonight", `vbn:${sessionId}`);
   return kb;
@@ -226,9 +244,7 @@ export function renderPartyDissolved(): string {
 // /lfp wizard
 // ============================================================================
 
-// Wizard start-time options: 16:00 → 23:30 in 30-min increments.
-const WIZARD_START_FIRST = 16 * 60;
-const WIZARD_START_LAST = 23 * 60 + 30;
+const WIZARD_HOURS = [16, 17, 18, 19, 20, 21, 22, 23];
 
 export function wizardStep1Text(): string {
   return "🎮 Open a session for tonight. When can the earliest player start?";
@@ -237,51 +253,31 @@ export function wizardStep1Text(): string {
 export function wizardStep1Keyboard(): InlineKeyboard {
   const kb = new InlineKeyboard();
   let i = 0;
-  for (let m = WIZARD_START_FIRST; m <= WIZARD_START_LAST; m += SLOT_MIN) {
-    kb.text(formatSlot(m), `lfp:start:${m}`);
+  for (const h of WIZARD_HOURS) {
+    kb.text(`${h}:00`, `lfp:start:${h * 60}`);
     i += 1;
-    if (i % 4 === 0) kb.row();
+    if (i % 3 === 0) kb.row();
   }
-  if (i % 4 !== 0) kb.row();
+  if (i % 3 !== 0) kb.row();
   kb.text("Cancel", "lfp:wcancel");
   return kb;
 }
 
-export function wizardStep2Text(startMinutes: number, endMinutes: number | null): string {
-  const head = `🎮 Start: ${formatSlot(startMinutes)}.`;
-  if (endMinutes === null) {
-    return `${head} Tap how late you'd play — pick the latest slot you can join, or tap more to extend.`;
-  }
-  return `${head} Until ${formatSlot(endMinutes)}. Tap more slots to extend, or tap Done.`;
+export function wizardStep2Text(startMinutes: number): string {
+  return `🎮 Start: ${formatSlot(startMinutes)}. Latest end?`;
 }
 
-/**
- * Step 2 keyboard. The user taps a slot to set the latest end time; the bot
- * re-renders with all slots from start to that pick marked ✅. Tapping a
- * later slot extends; tapping the current "last selected" shrinks by 30 min.
- *
- * `endMinutes` is the currently-chosen exclusive end (null = nothing selected
- * yet; user must tap at least once before Done is enabled).
- */
-export function wizardStep2Keyboard(
-  startMinutes: number,
-  endMinutes: number | null,
-): InlineKeyboard {
+export function wizardStep2Keyboard(startMinutes: number): InlineKeyboard {
   const kb = new InlineKeyboard();
+  // End hour options: any whole hour > startHour, up to 24 (midnight).
+  const startHour = Math.floor(startMinutes / 60);
   let i = 0;
-  // Slot buttons represent 30-min slots from startMinutes to 23:30. Tapping
-  // slot M sets endMinutes to M+30 (i.e. "play through this slot").
-  for (let m = startMinutes; m < DAY_MIN; m += SLOT_MIN) {
-    const selected = endMinutes !== null && m < endMinutes;
-    const label = selected ? `✅ ${formatSlot(m)}` : formatSlot(m);
-    kb.text(label, `lfp:end:${startMinutes}:${m}`);
+  for (let h = startHour + 1; h <= 24; h += 1) {
+    kb.text(formatSlot(h * 60), `lfp:end:${startMinutes}:${h * 60}`);
     i += 1;
-    if (i % 4 === 0) kb.row();
+    if (i % 3 === 0) kb.row();
   }
-  if (i % 4 !== 0) kb.row();
-  if (endMinutes !== null) {
-    kb.text("✅ Done", `lfp:done:${startMinutes}:${endMinutes}`);
-  }
+  if (i % 3 !== 0) kb.row();
   kb.text("◀ Back", "lfp:back:start").text("Cancel", "lfp:wcancel");
   return kb;
 }
