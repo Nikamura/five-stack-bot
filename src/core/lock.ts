@@ -134,11 +134,10 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
  * Walks the valid stacks largest-first:
  *  1. If any slot has yes >= currentStack, lock the EARLIEST such slot at
  *     currentStack with non-filler ✅ voters as core.
- *  2. Else if non-filler ✅ + fillerAvailable >= currentStack on any slot,
- *     lock the EARLIEST such slot using fillers to complete the lineup.
- *     Real ✅ voters always come first; fillers fill the remaining seats
- *     by vote-time. A later real ✅ vote will bump the filler back to
- *     alternate.
+ *  2. Else if yes + maybe + fillerAvailable >= currentStack on any slot,
+ *     lock the EARLIEST such slot, seating ✅ first, then 🤷 by vote-time,
+ *     then 🛟 fillers. A later real ✅ vote will bump a maybe or filler back
+ *     to alternate.
  *  3. Else if the stack is still mathematically possible
  *     (yes + maybe + fillerAvailable + notVoted >= stack), wait.
  *  4. Else fall through to the next-smallest stack and repeat.
@@ -155,28 +154,32 @@ export function evaluateLock(args: {
     const yesOnly = tallies.find((t) => t.yes >= stack);
     if (yesOnly) {
       const core = yesOnly.yesUserIds.slice(0, stack);
-      // Anyone else who said ✅, plus any fillers, are alternates.
+      // Anyone else who said ✅, plus maybes and fillers, are alternates.
       const alternates = [
         ...yesOnly.yesUserIds.slice(stack),
+        ...yesOnly.maybeUserIds,
         ...yesOnly.fillerAvailableUserIds,
       ];
       return { slot: yesOnly.slot, size: stack, core, alternates };
     }
-    // 2. Filler-assisted lock — non-filler ✅ + filler availability >= stack.
-    const withFiller = tallies.find((t) => t.yes + t.fillerAvailable >= stack);
-    if (withFiller) {
+    // 2. Soft lock — ✅ + 🤷 + 🛟 reaches the stack. ✅ seats first.
+    const withSoft = tallies.find(
+      (t) => t.yes + t.maybe + t.fillerAvailable >= stack,
+    );
+    if (withSoft) {
       const ranked = [
-        ...withFiller.yesUserIds,
-        ...withFiller.fillerAvailableUserIds,
+        ...withSoft.yesUserIds,
+        ...withSoft.maybeUserIds,
+        ...withSoft.fillerAvailableUserIds,
       ];
       return {
-        slot: withFiller.slot,
+        slot: withSoft.slot,
         size: stack,
         core: ranked.slice(0, stack),
         alternates: ranked.slice(stack),
       };
     }
-    // 3. Still in play? (anyone undecided or maybe could still push it over.)
+    // 3. Still in play? (notVoted players could still push it over.)
     const stillInPlay = tallies.some(
       (t) => t.yes + t.maybe + t.fillerAvailable + t.notVoted >= stack,
     );
@@ -205,7 +208,7 @@ export function tentativeLock(args: {
   const stacks = [...args.validStacks].sort((a, b) => b - a);
   for (const stack of stacks) {
     const earliest = args.tallies.find(
-      (t) => t.yes + t.fillerAvailable >= stack,
+      (t) => t.yes + t.maybe + t.fillerAvailable >= stack,
     );
     if (earliest) return { slot: earliest.slot, size: stack };
   }

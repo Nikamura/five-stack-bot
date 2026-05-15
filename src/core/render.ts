@@ -68,8 +68,10 @@ export function renderSessionBody(args: {
       const slotTally = tallies.find((t) => t.slot === tentative.slot);
       const ranked = [
         ...(slotTally?.yesUserIds ?? []),
+        ...(slotTally?.maybeUserIds ?? []),
         ...(slotTally?.fillerAvailableUserIds ?? []),
       ];
+      const maybeSet = new Set(slotTally?.maybeUserIds ?? []);
       const fillerSet = new Set(slotTally?.fillerAvailableUserIds ?? []);
       const coreNames = ranked
         .slice(0, tentative.size)
@@ -77,7 +79,9 @@ export function renderSessionBody(args: {
           const name = rosterById.get(id)?.display_name;
           if (!name) return null;
           const escaped = escapeHtml(name);
-          return fillerSet.has(id) ? `${escaped} 🛟` : escaped;
+          if (fillerSet.has(id)) return `${escaped} 🛟`;
+          if (maybeSet.has(id)) return `${escaped} 🤷`;
+          return escaped;
         })
         .filter((n): n is string => !!n)
         .join(", ");
@@ -270,6 +274,16 @@ export function renderGameOn(args: {
 
 export function renderGameOnKeyboard(sessionId: number): InlineKeyboard {
   return new InlineKeyboard().text("⏰ I'll be 15 min late", `late:${sessionId}`);
+}
+
+/**
+ * Nudge for 🤷 voters who got pulled into the locked party. They're seated
+ * because the bot treats maybe as soft-yes for stack completion, but we want
+ * them to upgrade to ✅ so the lineup is firm. Posted alongside GAME ON when
+ * any core seat is held by a maybe voter.
+ */
+export function renderMaybeNudge(maybeMentions: string): string {
+  return `🤷 ${maybeMentions} — you're in the party as a maybe. Tap ✅ on the locked slot to confirm you're playing.`;
 }
 
 export function renderT15(coreMentions: string): string {

@@ -31,7 +31,7 @@ The target users are adults with shifting evening schedules. The bot's job is to
 | **Roster** | The list of players the bot considers part of this chat. Tagged on `/lfp`, eligible to vote. Defined and edited by chat members. |
 | **Session** | One `/lfp` invocation. Has a slot range, a set of votes, and at most one locked party. |
 | **Slot** | A 30-minute candidate start time within the session's range (e.g., 19:30, 20:00, 20:30…). |
-| **Vote** | A roster member's stance on a slot: ✅ yes / 🤷 maybe / ❌ no. Defaults to "no vote" until cast. Tapping a slot button cycles ✅ → 🤷 → ❌ → ✅ (no "cleared" stop). |
+| **Vote** | A roster member's stance on a slot: ✅ yes / 🤷 maybe / ❌ no. Defaults to "no vote" until cast. Tapping a slot button cycles ✅ → 🤷 → ❌ → ✅ (no "cleared" stop). 🤷 is treated as a *soft yes* for lock evaluation — a 🤷 voter helps complete a stack, but an explicit ✅ voter always takes priority and will bump them to alternate (see §5.4). |
 | **Opener** | The user who ran `/lfp`. Auto-added to the roster (if not already in it) and auto-✅'d on every slot. Tap-to-change works exactly like any other voter. |
 | **Lock** | The bot's declaration that a party is forming at a specific slot, with a specific 5/3/2 size and a specific player list. |
 | **Alternate** | A player who voted yes on the locked slot but wasn't in the first 5. Auto-promoted if a locked player drops. |
@@ -90,9 +90,9 @@ Roster management is keyboard-driven, with typed shortcuts available:
 
 The chat has a **valid-stack set**, configurable via `/lfp-stacks` (see §5.7), defaulting to `{5, 3, 2}`. The bot continuously evaluates after every vote change, walking the valid stacks largest-first:
 
-1. **Try the largest enabled stack** (default 5). If any slot has ≥ 5 real ✅ votes (i.e. from non-filler roster members), lock the **earliest** such slot at 5-stack. Fillers who also said ✅/🤷 on that slot become alternates.
-2. **Otherwise, can a filler complete the stack?** If `(real ✅ + fillerAvailable)` reaches the stack size on any slot, lock the earliest such slot with fillers seated in vote-time order behind the real ✅ voters. A later real ✅ vote bumps the filler back to alternate (see "if 6th comes, 6th plays" §4).
-3. **Otherwise, is the stack still mathematically possible?** A slot is "still in play" if `(✅ + 🤷 + fillerAvailable + not-yet-voted)` on that slot is ≥ stack size. If any slot is still in play, **wait** — do not lock anything smaller.
+1. **Try the largest enabled stack** (default 5). If any slot has ≥ 5 real ✅ votes (i.e. from non-filler roster members), lock the **earliest** such slot at 5-stack. Maybes and fillers who also responded on that slot become alternates.
+2. **Otherwise, can soft-yes votes complete the stack?** If `(real ✅ + 🤷 + fillerAvailable)` reaches the stack size on any slot, lock the earliest such slot. Seats fill in priority order: ✅ first (by vote-time), then 🤷 by vote-time, then 🛟 fillers. A later real ✅ vote bumps a 🤷 or filler back to alternate; a later 🤷 bumps a filler. When a lock seats any 🤷 voter as core, the bot also posts a separate nudge tagging those maybes and asking them to confirm with ✅.
+3. **Otherwise, is the stack still mathematically possible?** A slot is "still in play" if `(✅ + 🤷 + fillerAvailable + not-yet-voted)` on that slot is ≥ stack size. If any slot is still in play, **wait** — do not lock anything smaller. (In practice this only fires when notVoted > 0, since step 2 already locks once enough soft-yes votes are in.)
 4. **Otherwise, try the next-largest enabled stack** (default 3), applying steps 1–3 again.
 5. **Otherwise, try 2-stack** by the same rule.
 6. **Otherwise, no lock** — the bot waits or eventually archives the session unanswered.
@@ -101,7 +101,7 @@ While no actual lock is in effect, the body shows a **tentative-lock footer** wh
 
 The "skip 4-stack" rule from your group's preference is implemented by 4 being absent from the default valid-stack set, not by hardcoded logic. A different chat can enable 4 if they want.
 
-When the bot locks, the **first 5 (or 3, or 2) ✅ voters in chronological vote order** form the party. Anyone else who voted ✅ on that slot becomes an **alternate**, ranked by vote time.
+When the bot locks, seats are filled in priority order — **✅ first (by vote-time), then 🤷, then 🛟** — up to the locked stack size. Everyone else who responded on that slot becomes an **alternate**, in the same priority order.
 
 Because step 2 only releases the lock once every roster member has voted (or voted ❌), an inactive player who never responds will block fall-back to a smaller stack. That's intentional: the bot can't tell the difference between "still might join" and "phone is in a drawer." A human can `/lfp-skip @user` to mark a roster member as a no-show, treating them as ❌ for lock evaluation only (their roster membership is unchanged).
 

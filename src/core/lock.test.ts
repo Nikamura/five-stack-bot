@@ -281,6 +281,65 @@ describe("evaluateLock", () => {
     assert.equal(r.slot, null);
   });
 
+  it("treats 🤷 as soft-yes: 3 ✅ + 2 🤷 completes a 5-stack", () => {
+    const slots = [1080];
+    const roster = new Set([1, 2, 3, 4, 5]);
+    const votes: VoteRow[] = [
+      vote(1, 1080, "yes", 1),
+      vote(2, 1080, "yes", 2),
+      vote(3, 1080, "yes", 3),
+      vote(4, 1080, "maybe", 4),
+      vote(5, 1080, "maybe", 5),
+    ];
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
+    const r = evaluateLock({ tallies: t, validStacks: stacks });
+    assert.equal(r.size, 5);
+    // ✅ voters seat first, then 🤷 by vote-time.
+    assert.deepEqual(r.core, [1, 2, 3, 4, 5]);
+  });
+
+  it("a later ✅ bumps a 🤷 out of the locked party", () => {
+    const slots = [1080];
+    const roster = new Set([1, 2, 3, 4, 5, 6]);
+    const votes: VoteRow[] = [
+      vote(1, 1080, "yes", 1),
+      vote(2, 1080, "yes", 2),
+      vote(3, 1080, "yes", 3),
+      vote(4, 1080, "yes", 4),
+      vote(5, 1080, "maybe", 5),
+      vote(6, 1080, "yes", 6), // 5th ✅ — bumps user 5 (maybe) to alternate
+    ];
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
+    const r = evaluateLock({ tallies: t, validStacks: stacks });
+    assert.equal(r.size, 5);
+    // Step 1 fires (5 hard ✅): yes-only core.
+    assert.deepEqual(r.core, [1, 2, 3, 4, 6]);
+    assert.deepEqual(r.alternates, [5]);
+  });
+
+  it("seats ✅ → 🤷 → 🛟 in that priority", () => {
+    const slots = [1080];
+    const roster = new Set([1, 2, 3, 4, 5]);
+    const votes: VoteRow[] = [
+      vote(1, 1080, "yes", 1),
+      vote(2, 1080, "yes", 2),
+      vote(3, 1080, "yes", 3),
+      vote(4, 1080, "maybe", 4),
+      vote(5, 1080, "yes", 5), // user 5 is a filler ✅
+    ];
+    const t = tallySlots({
+      slots,
+      votes,
+      rosterIds: roster,
+      skipIds: new Set(),
+      fillerIds: new Set([5]),
+    });
+    const r = evaluateLock({ tallies: t, validStacks: stacks });
+    assert.equal(r.size, 5);
+    // ✅ first (1, 2, 3), then 🤷 (4), then 🛟 (5).
+    assert.deepEqual(r.core, [1, 2, 3, 4, 5]);
+  });
+
   it("locks 2-stack only when nothing larger is possible", () => {
     const slots = [1080];
     const roster = new Set([1, 2, 3, 4, 5]);

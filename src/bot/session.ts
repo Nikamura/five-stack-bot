@@ -9,6 +9,7 @@ import {
   renderGameOn,
   renderGameOnKeyboard,
   renderLoadUp,
+  renderMaybeNudge,
   renderPartyChanged,
   renderPartyDissolved,
   renderSessionBody,
@@ -516,10 +517,24 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   // Side effects per diff.
   if (diff.kind === "new") {
     await postGameOn({ session, lock: next, roster, availableAtSlot });
+    await postMaybeNudge({
+      session,
+      lock: next,
+      roster,
+      tallies,
+      previouslyNudged: new Set(),
+    });
     await scheduleT15ForLock({ session, lock: next, tz: chat.tz });
   } else if (diff.kind === "changed") {
     await editGameOn({ session, lock: next, roster, availableAtSlot });
     await postChangedFollowup({ session, prev: diff.prev, next, roster });
+    await postMaybeNudge({
+      session,
+      lock: next,
+      roster,
+      tallies,
+      previouslyNudged: new Set(diff.prev.core),
+    });
     cancelT15(session.id);
     q.deleteJobsForSession(session.id, "t15");
     await scheduleT15ForLock({ session, lock: next, tz: chat.tz });
@@ -564,6 +579,33 @@ async function postGameOn(args: {
     link_preview_options: { is_disabled: true },
   });
   q.setSessionGameOnMessage(args.session.id, sent.message_id);
+}
+
+/**
+ * Tag any core member whose vote at the locked slot is 🤷, asking them to
+ * confirm with ✅. Fires alongside GAME ON on a "new" lock; on "changed"
+ * only nudges newly-promoted maybes so previously-confirmed players aren't
+ * pinged again.
+ */
+async function postMaybeNudge(args: {
+  session: SessionRow;
+  lock: LockResult;
+  roster: RosterMember[];
+  tallies: SlotTally[];
+  previouslyNudged: Set<number>;
+}): Promise<void> {
+  const slotTally = args.tallies.find((t) => t.slot === args.lock.slot);
+  if (!slotTally) return;
+  const maybeAtSlot = new Set(slotTally.maybeUserIds);
+  const targets = args.lock.core.filter(
+    (id) => maybeAtSlot.has(id) && !args.previouslyNudged.has(id),
+  );
+  if (targets.length === 0) return;
+  const mentions = mentionByIds(args.roster, targets);
+  await bot.api.sendMessage(args.session.chat_id, renderMaybeNudge(mentions), {
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+  });
 }
 
 async function editGameOn(args: {
