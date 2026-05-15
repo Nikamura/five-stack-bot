@@ -317,6 +317,29 @@ describe("evaluateLock", () => {
     assert.deepEqual(r.alternates, [5]);
   });
 
+  it("locks 5-stack when a slot has 3 ✅ + 3 🤷 (screenshot scenario)", () => {
+    // 7-player roster. At slot 1200 (20:00): 3 ✅, 3 🤷, 1 ❌.
+    // Older code would have left this as a tentative-only lock; under
+    // soft-yes semantics this should fire a real 5-stack lock at 20:00.
+    const slots = [1200];
+    const roster = new Set([1, 2, 3, 4, 5, 6, 7]);
+    const votes: VoteRow[] = [
+      vote(1, 1200, "yes", 1),
+      vote(2, 1200, "yes", 2),
+      vote(3, 1200, "yes", 3),
+      vote(4, 1200, "maybe", 4),
+      vote(5, 1200, "maybe", 5),
+      vote(6, 1200, "maybe", 6),
+      vote(7, 1200, "no", 7),
+    ];
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
+    const r = evaluateLock({ tallies: t, validStacks: stacks });
+    assert.equal(r.slot, 1200);
+    assert.equal(r.size, 5);
+    assert.deepEqual(r.core, [1, 2, 3, 4, 5]);
+    assert.deepEqual(r.alternates, [6]);
+  });
+
   it("seats ✅ → 🤷 → 🛟 in that priority", () => {
     const slots = [1080];
     const roster = new Set([1, 2, 3, 4, 5]);
