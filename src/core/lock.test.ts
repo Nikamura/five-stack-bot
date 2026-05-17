@@ -91,10 +91,11 @@ describe("evaluateLock", () => {
     assert.deepEqual(r.core, [1, 2, 3, 4, 5]);
   });
 
-  it("waits for 5-stack while it's still possible (a player hasn't voted)", () => {
+  it("locks the largest stack achievable now without waiting for a bigger one", () => {
     const slots = [1080];
     const roster = new Set([1, 2, 3, 4, 5]);
-    // 3 yes votes; 2 players haven't voted — 5-stack still mathematically possible.
+    // 3 yes votes; 2 players haven't voted. 5-stack is still mathematically
+    // possible but we don't wait — lock 3-stack now and re-evaluate later.
     const votes: VoteRow[] = [
       vote(1, 1080, "yes", 1),
       vote(2, 1080, "yes", 2),
@@ -102,8 +103,45 @@ describe("evaluateLock", () => {
     ];
     const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
     const r = evaluateLock({ tallies: t, validStacks: stacks });
-    assert.equal(r.slot, null);
-    assert.equal(r.size, null);
+    assert.equal(r.slot, 1080);
+    assert.equal(r.size, 3);
+    assert.deepEqual(r.core, [1, 2, 3]);
+  });
+
+  it("locks 4-stack at 19:30 when 4 yes-votes are in with 4 enabled (screenshot case)", () => {
+    // The case from the bug report: 4 ✅ at 19:30 with 1 not-voted, stacks
+    // include 4. Should lock 4-stack immediately, not wait for the 5th.
+    const slots = [1170]; // 19:30
+    const roster = new Set([1, 2, 3, 4, 5]);
+    const votes: VoteRow[] = [
+      vote(1, 1170, "yes", 1),
+      vote(2, 1170, "yes", 2),
+      vote(3, 1170, "yes", 3),
+      vote(4, 1170, "yes", 4),
+    ];
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
+    const r = evaluateLock({ tallies: t, validStacks: [5, 4, 3, 2] });
+    assert.equal(r.slot, 1170);
+    assert.equal(r.size, 4);
+    assert.deepEqual(r.core, [1, 2, 3, 4]);
+  });
+
+  it("upgrades from 4-stack to 5-stack when a 5th yes-vote arrives", () => {
+    // After locking 4-stack, the 5th player votes ✅. Re-evaluation should
+    // pick the larger stack so the bot can post `🔄 4-stack → 5-stack`.
+    const slots = [1170];
+    const roster = new Set([1, 2, 3, 4, 5]);
+    const votes: VoteRow[] = [
+      vote(1, 1170, "yes", 1),
+      vote(2, 1170, "yes", 2),
+      vote(3, 1170, "yes", 3),
+      vote(4, 1170, "yes", 4),
+      vote(5, 1170, "yes", 5),
+    ];
+    const t = tallySlots({ slots, votes, rosterIds: roster, skipIds: new Set(), fillerIds: new Set() });
+    const r = evaluateLock({ tallies: t, validStacks: [5, 4, 3, 2] });
+    assert.equal(r.size, 5);
+    assert.deepEqual(r.core, [1, 2, 3, 4, 5]);
   });
 
   it("falls back to 3-stack when 5-stack is mathematically dead", () => {
@@ -167,17 +205,16 @@ describe("evaluateLock", () => {
     assert.deepEqual(r.alternates, [60]);
   });
 
-  it("/lfp-skip releases the wait so a 3-stack can lock", () => {
+  it("/lfp-skip counts the skipped user as ❌ for the lock evaluation", () => {
     const slots = [1080];
     const roster = new Set([1, 2, 3, 4, 5]);
-    // 3 yes votes, 1 no — without skip, 5-stack still possible (1 unvoted).
     const votes: VoteRow[] = [
       vote(1, 1080, "yes", 1),
       vote(2, 1080, "yes", 2),
       vote(3, 1080, "yes", 3),
       vote(4, 1080, "no", 4),
     ];
-    // user 5 hasn't voted. Skip them.
+    // user 5 hasn't voted. Skip them so they read as ❌ rather than pending.
     const t = tallySlots({
       slots,
       votes,
@@ -187,6 +224,7 @@ describe("evaluateLock", () => {
     });
     const r = evaluateLock({ tallies: t, validStacks: stacks });
     assert.equal(r.size, 3);
+    assert.equal(t[0]!.no, 2);
   });
 
   it("a filler completes a 5-stack when only 4 real ✅ are in", () => {
@@ -260,10 +298,11 @@ describe("evaluateLock", () => {
     assert.deepEqual(r.core, [1, 2, 3, 4, 5]);
   });
 
-  it("does not lock if even filler help isn't enough and stack still in play", () => {
+  it("falls through to a smaller stack when filler help can't reach the larger one", () => {
     const slots = [1080];
     const roster = new Set([1, 2, 3, 4, 5]);
-    // 3 real ✅ + 1 filler 🤷 + 1 not voted. yes+filler = 4 < 5. Still in play.
+    // 3 real ✅ + 1 filler 🤷 + 1 not voted. yes+filler = 4 < 5 for the
+    // 5-stack — we don't wait, we drop to 3-stack (yes=3 strict).
     const votes: VoteRow[] = [
       vote(1, 1080, "yes", 1),
       vote(2, 1080, "yes", 2),
@@ -278,7 +317,9 @@ describe("evaluateLock", () => {
       fillerIds: new Set([4]),
     });
     const r = evaluateLock({ tallies: t, validStacks: stacks });
-    assert.equal(r.slot, null);
+    assert.equal(r.size, 3);
+    assert.deepEqual(r.core, [1, 2, 3]);
+    assert.deepEqual(r.alternates, [4]);
   });
 
   it("treats 🤷 as soft-yes: 3 ✅ + 2 🤷 completes a 5-stack", () => {
