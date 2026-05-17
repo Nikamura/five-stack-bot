@@ -138,9 +138,12 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
  *     lock the EARLIEST such slot, seating ✅ first, then 🤷 by vote-time,
  *     then 🛟 fillers. A later real ✅ vote will bump a maybe or filler back
  *     to alternate.
- *  3. Else if the stack is still mathematically possible
- *     (yes + maybe + fillerAvailable + notVoted >= stack), wait.
- *  4. Else fall through to the next-smallest stack and repeat.
+ *  3. Else fall through to the next-smallest stack and repeat.
+ *
+ * We do NOT wait for a bigger stack that's still mathematically possible —
+ * the bot locks the largest stack achievable right now. If new ✅/🤷/🛟
+ * votes later push a slot over a bigger stack, re-evaluation upgrades the
+ * lock in place (diffLock → "changed" with the size bump).
  */
 export function evaluateLock(args: {
   tallies: SlotTally[];
@@ -179,14 +182,7 @@ export function evaluateLock(args: {
         alternates: ranked.slice(stack),
       };
     }
-    // 3. Still in play? (notVoted players could still push it over.)
-    const stillInPlay = tallies.some(
-      (t) => t.yes + t.maybe + t.fillerAvailable + t.notVoted >= stack,
-    );
-    if (stillInPlay) {
-      return { slot: null, size: null, core: [], alternates: [] };
-    }
-    // Else: stack dead. Try the next-smallest.
+    // Else: stack unreachable right now. Try the next-smallest.
   }
 
   return { slot: null, size: null, core: [], alternates: [] };

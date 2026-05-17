@@ -92,18 +92,19 @@ The chat has a **valid-stack set**, configurable via `/lfp-stacks` (see §5.7), 
 
 1. **Try the largest enabled stack** (default 5). If any slot has ≥ 5 real ✅ votes (i.e. from non-filler roster members), lock the **earliest** such slot at 5-stack. Maybes and fillers who also responded on that slot become alternates.
 2. **Otherwise, can soft-yes votes complete the stack?** If `(real ✅ + 🤷 + fillerAvailable)` reaches the stack size on any slot, lock the earliest such slot. Seats fill in priority order: ✅ first (by vote-time), then 🤷 by vote-time, then 🛟 fillers. A later real ✅ vote bumps a 🤷 or filler back to alternate; a later 🤷 bumps a filler. When a lock seats any 🤷 voter as core, the bot also posts a separate nudge tagging those maybes and asking them to confirm with ✅.
-3. **Otherwise, is the stack still mathematically possible?** A slot is "still in play" if `(✅ + 🤷 + fillerAvailable + not-yet-voted)` on that slot is ≥ stack size. If any slot is still in play, **wait** — do not lock anything smaller. (In practice this only fires when notVoted > 0, since step 2 already locks once enough soft-yes votes are in.)
-4. **Otherwise, try the next-largest enabled stack** (default 3), applying steps 1–3 again.
-5. **Otherwise, try 2-stack** by the same rule.
-6. **Otherwise, no lock** — the bot waits or eventually archives the session unanswered.
+3. **Otherwise, try the next-largest enabled stack** (default 3), applying steps 1–2 again.
+4. **Otherwise, try 2-stack** by the same rule.
+5. **Otherwise, no lock** — the bot waits or eventually archives the session unanswered.
 
-While no actual lock is in effect, the body shows a **tentative-lock footer** when *any* slot has reached the smallest valid stack: `⏳ Could play 3-stack at 19:00 with Karolis, Tomas, Justas — waiting on more votes for a bigger party.` This makes "we could play right now if nobody else shows up" visible without parsing the table.
+The bot does **not** hold off locking a smaller stack just because a bigger one is still mathematically possible. If 4 players have ✅'d at 19:30 and a 5th hasn't voted yet, the bot locks the 4-stack right now (when 4 is in the valid-stack set). If that 5th player later votes ✅, re-evaluation upgrades the lock in place to a 5-stack and posts the `🔄 4-stack → 5-stack` follow-up. Lock fast, update on new activity.
+
+While no actual lock is in effect, the body shows a **tentative-lock footer** when *any* slot has reached the smallest valid stack: `⏳ Could play 3-stack at 19:00 with Karolis, Tomas, Justas — waiting on more votes for a bigger party.` This makes "we could play right now if nobody else shows up" visible without parsing the table. In practice this only appears very early in voting, since the bot otherwise locks whatever's achievable.
 
 The "skip 4-stack" rule from your group's preference is implemented by 4 being absent from the default valid-stack set, not by hardcoded logic. A different chat can enable 4 if they want.
 
 When the bot locks, seats are filled in priority order — **✅ first (by vote-time), then 🤷, then 🛟** — up to the locked stack size. Everyone else who responded on that slot becomes an **alternate**, in the same priority order.
 
-Because step 2 only releases the lock once every roster member has voted (or voted ❌), an inactive player who never responds will block fall-back to a smaller stack. That's intentional: the bot can't tell the difference between "still might join" and "phone is in a drawer." A human can `/lfp-skip @user` to mark a roster member as a no-show, treating them as ❌ for lock evaluation only (their roster membership is unchanged).
+`/lfp-skip @user` marks a roster member as a session-only ❌ — useful for cleaning up the per-voter summary when someone's clearly not playing, but no longer required to unblock a lock since the bot doesn't wait on unvoted players.
 
 ### 5.5 Lock-in actions
 
