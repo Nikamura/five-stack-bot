@@ -414,7 +414,9 @@ Target environment: a small VPS (Hetzner CX11 or DigitalOcean equivalent, ~€4�
 
 All vote handlers and roster mutations are serialised per session via an in-process per-session mutex. After every state change, the lock-evaluation routine runs end-to-end and produces a new lock state. Differences between old and new produce the user-visible side effects (post GAME ON, post party-changed follow-up, schedule/cancel T-15, etc.) — all idempotent.
 
-The poll-message edit is **debounced** ~1s per session: each state change reschedules a single pending edit, so a burst of votes coalesces into one `editMessageText` call and stays under Telegram's per-message edit rate limit (~1/s for messages with inline keyboards). `safeEditMessage` also catches HTTP 429 explicitly: it sleeps `retry_after + 1s` and retries once before giving up.
+Lock evaluation itself is **debounced** ~1.5s per session: each vote/skip/filler change reschedules a single pending evaluation, so a burst of votes from a player refining their availability coalesces into one final lock outcome rather than spamming `GAME ON` / `Party dissolved` / maybe-nudge messages on every tap.
+
+The poll-message edit is **debounced** ~1s per session (and fires from inside the eval flush): each state change reschedules a single pending edit, so a burst of votes coalesces into one `editMessageText` call and stays under Telegram's per-message edit rate limit (~1/s for messages with inline keyboards). `safeEditMessage` also catches HTTP 429 explicitly: it sleeps `retry_after + 1s` and retries once before giving up.
 
 Callback-query handlers always answer the query *first* (with an optimistic toast computed from the persisted state before the work runs) and do the DB / message-edit work after. This clears the button spinner immediately so rapid taps register cleanly. Toast text is best-effort under fast retaps; the message body remains the source of truth.
 
