@@ -124,6 +124,43 @@ function cancelPendingPollEdit(sessionId: number): void {
   }
 }
 
+// ----------------------------------------------------------------------------
+// Debounced lock evaluation. Without this, every vote tap that flips lock
+// state immediately posts `GAME ON` / `Party dissolved` / maybe-nudge messages
+// — a player toggling their maybes back and forth fires N rounds of those
+// messages in seconds. Debouncing collapses a burst into one final outcome.
+// ----------------------------------------------------------------------------
+
+const EVAL_DEBOUNCE_MS = 1500;
+const pendingEvalTimers = new Map<number, NodeJS.Timeout>();
+
+function scheduleEvaluation(sessionId: number): void {
+  const existing = pendingEvalTimers.get(sessionId);
+  if (existing) clearTimeout(existing);
+  const t = setTimeout(() => {
+    pendingEvalTimers.delete(sessionId);
+    void flushEvaluation(sessionId);
+  }, EVAL_DEBOUNCE_MS);
+  t.unref?.();
+  pendingEvalTimers.set(sessionId, t);
+}
+
+function cancelPendingEvaluation(sessionId: number): void {
+  const t = pendingEvalTimers.get(sessionId);
+  if (t) {
+    clearTimeout(t);
+    pendingEvalTimers.delete(sessionId);
+  }
+}
+
+async function flushEvaluation(sessionId: number): Promise<void> {
+  await withMutex(`session:${sessionId}`, async () => {
+    const session = q.getSession(sessionId);
+    if (!session || session.archived_at !== null) return;
+    await evaluateAndApply(session);
+  });
+}
+
 async function flushPollEdit(sessionId: number): Promise<void> {
   await withMutex(`session:${sessionId}`, async () => {
     const session = q.getSession(sessionId);
@@ -187,7 +224,7 @@ export async function recordVote(args: {
     q.setVote(args.sessionId, args.userId, args.slot, next);
     const rosterIds = q.getRosterIds(session.chat_id);
     const isRoster = rosterIds.has(args.userId);
-    await evaluateAndApply(session);
+    scheduleEvaluation(args.sessionId);
     return { newValue: next, isRoster };
   });
 }
@@ -216,7 +253,7 @@ export async function recordComboVote(args: {
     q.setVote(args.sessionId, args.userId, args.slot + 30, next);
     const rosterIds = q.getRosterIds(session.chat_id);
     const isRoster = rosterIds.has(args.userId);
-    await evaluateAndApply(session);
+    scheduleEvaluation(args.sessionId);
     return { newValue: next, isRoster };
   });
 }
@@ -230,7 +267,7 @@ export async function bulkNoTonight(args: {
     if (!session || session.archived_at !== null) throw new SessionGone();
     const slots = buildSlots(session.start_minutes, session.end_minutes);
     q.bulkNoForUser(args.sessionId, args.userId, slots);
-    await evaluateAndApply(session);
+    scheduleEvaluation(args.sessionId);
   });
 }
 
@@ -259,7 +296,7 @@ export async function bulkYesToggleTonight(args: {
       q.bulkYesForUser(args.sessionId, args.userId, slots);
       result = "yes-all";
     }
-    await evaluateAndApply(session);
+    scheduleEvaluation(args.sessionId);
     return result;
   });
 }
@@ -272,7 +309,7 @@ export async function markSkip(args: {
     const session = q.getSession(args.sessionId);
     if (!session || session.archived_at !== null) throw new SessionGone();
     q.addSkip(args.sessionId, args.userId);
-    await evaluateAndApply(session);
+    scheduleEvaluation(args.sessionId);
   });
 }
 
@@ -299,7 +336,7 @@ export async function toggleFiller(args: {
       q.addFiller(args.sessionId, args.userId);
       next = "on";
     }
-    await evaluateAndApply(session);
+    scheduleEvaluation(args.sessionId);
     return next;
   });
 }
@@ -366,6 +403,7 @@ export async function cancelSession(sessionId: number): Promise<void> {
     q.deleteJobsForSession(sessionId);
     cancelT15(sessionId);
     cancelPendingPollEdit(sessionId);
+    cancelPendingEvaluation(sessionId);
     if (session.poll_message_id) {
       await safeEditMessage({
         chatId: session.chat_id,
@@ -384,6 +422,7 @@ export async function archiveSessionFromScheduler(sessionId: number): Promise<vo
     q.archiveSession(sessionId);
     q.deleteJobsForSession(sessionId);
     cancelPendingPollEdit(sessionId);
+    cancelPendingEvaluation(sessionId);
     if (session.poll_message_id) {
       const lock = q.getLock(sessionId);
       const tail = lock
