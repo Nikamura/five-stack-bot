@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateLock, nextVote, tallySlots, tentativeLock, diffLock } from "./lock.js";
+import {
+  diffLock,
+  evaluateLock,
+  nextVote,
+  tallySlots,
+  tentativeLock,
+  unvotedRosterMembers,
+} from "./lock.js";
 import type { VoteRow, VoteValue } from "../db/types.js";
 
 function vote(uid: number, slot: number, value: VoteValue, voted_at: number): VoteRow {
@@ -69,6 +76,76 @@ describe("tallySlots", () => {
     });
     assert.equal(t[0]!.no, 1);
     assert.equal(t[0]!.fillerAvailable, 0);
+  });
+
+  it("counts an engaged voter as implicit ❌ on slots they didn't vote on", () => {
+    // Two slots; users 1 and 2 vote ✅ only at 18:00. At 18:30 they're
+    // implicit ❌ because they engaged with voting but skipped the slot.
+    // User 3 (silent on both slots) stays pending.
+    const slots = [1080, 1110];
+    const roster = new Set([1, 2, 3]);
+    const votes: VoteRow[] = [vote(1, 1080, "yes", 1), vote(2, 1080, "yes", 2)];
+    const t = tallySlots({
+      slots,
+      votes,
+      rosterIds: roster,
+      skipIds: new Set(),
+      fillerIds: new Set(),
+    });
+    // 18:00 unchanged from before: 2 yes, user 3 pending.
+    assert.equal(t[0]!.yes, 2);
+    assert.equal(t[0]!.no, 0);
+    assert.equal(t[0]!.notVoted, 1);
+    // 18:30: users 1+2 implicit ❌, user 3 still pending.
+    assert.equal(t[1]!.yes, 0);
+    assert.equal(t[1]!.no, 2);
+    assert.equal(t[1]!.notVoted, 1);
+    assert.deepEqual([...t[1]!.noUserIds].sort(), [1, 2]);
+  });
+
+  it("a fully-unvoted user remains in notVoted", () => {
+    // User 1 votes once; users 2 and 3 are silent across all slots → notVoted.
+    const slots = [1080, 1110];
+    const roster = new Set([1, 2, 3]);
+    const t = tallySlots({
+      slots,
+      votes: [vote(1, 1080, "yes", 1)],
+      rosterIds: roster,
+      skipIds: new Set(),
+      fillerIds: new Set(),
+    });
+    // 18:30: user 1 implicit ❌, users 2+3 still pending.
+    assert.equal(t[1]!.no, 1);
+    assert.equal(t[1]!.notVoted, 2);
+  });
+});
+
+describe("unvotedRosterMembers", () => {
+  it("returns roster members with zero votes in the session", () => {
+    const out = unvotedRosterMembers({
+      votes: [vote(1, 1080, "yes", 1), vote(2, 1110, "no", 2)],
+      rosterIds: new Set([1, 2, 3, 4]),
+      skipIds: new Set(),
+    });
+    assert.deepEqual([...out].sort(), [3, 4]);
+  });
+
+  it("excludes session-skipped roster members from the nudge list", () => {
+    const out = unvotedRosterMembers({
+      votes: [],
+      rosterIds: new Set([1, 2, 3]),
+      skipIds: new Set([3]),
+    });
+    assert.deepEqual([...out].sort(), [1, 2]);
+  });
+
+  it("excludes non-roster spectators", () => {
+    const out = unvotedRosterMembers({
+      votes: [vote(99, 1080, "yes", 1)],
+      rosterIds: new Set([1, 2]),
+      skipIds: new Set(),
+    });
+    assert.deepEqual([...out].sort(), [1, 2]);
   });
 });
 

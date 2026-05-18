@@ -236,6 +236,14 @@ export function renderGameOn(args: {
    * 3v3-custom hint so the alternates aren't quietly left out.
    */
   availableAtSlot?: number;
+  /**
+   * Roster members who haven't voted on any slot in this session. When the
+   * locked size is below {@link upgradeTarget}, we tag them in the GAME ON
+   * body so they know a ✅ from them would upgrade the party.
+   */
+  unvotedIds?: number[];
+  /** The next-larger enabled stack (e.g. 5 when locked at 4). */
+  upgradeTarget?: number | null;
 }): string {
   const map = new Map(args.roster.map((m) => [m.telegram_user_id, m]));
   const renderCore = (id: number): string => {
@@ -268,6 +276,26 @@ export function renderGameOn(args: {
       "",
       `💡 <b>${args.availableAtSlot} players available</b> — consider 3v3 Summoner's Rift or ARAM custom so everyone plays.`,
     );
+  }
+  if (
+    args.upgradeTarget &&
+    args.upgradeTarget > args.size &&
+    args.unvotedIds &&
+    args.unvotedIds.length > 0
+  ) {
+    const mentions = args.unvotedIds
+      .map((id) => {
+        const m = map.get(id);
+        return m ? mention(m) : "";
+      })
+      .filter(Boolean)
+      .join(" ");
+    if (mentions) {
+      lines.push(
+        "",
+        `🔔 ${mentions} — tap ✅ on ${formatSlot(args.slot)} to upgrade to a ${args.upgradeTarget}-stack.`,
+      );
+    }
   }
   return lines.join("\n");
 }

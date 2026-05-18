@@ -3,7 +3,13 @@ import { bot } from "./instance.js";
 import { withMutex } from "./mutex.js";
 import * as q from "../db/queries.js";
 import type { LockResult, SlotTally } from "../core/lock.js";
-import { diffLock, evaluateLock, nextVote, tallySlots } from "../core/lock.js";
+import {
+  diffLock,
+  evaluateLock,
+  nextVote,
+  tallySlots,
+  unvotedRosterMembers,
+} from "../core/lock.js";
 import { buildSlots } from "../core/slots.js";
 import {
   renderGameOn,
@@ -484,6 +490,8 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   const diff = diffLock(prev, next);
   const availableAtSlot =
     next.slot !== null ? availableAtSlotFromTallies(tallies, next.slot) : 0;
+  const unvotedIds = unvotedRosterMembers({ votes, rosterIds, skipIds });
+  const upgradeTarget = upgradeStackAbove(next.size, validStacks);
 
   // Persist new lock state.
   if (
@@ -516,7 +524,14 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
 
   // Side effects per diff.
   if (diff.kind === "new") {
-    await postGameOn({ session, lock: next, roster, availableAtSlot });
+    await postGameOn({
+      session,
+      lock: next,
+      roster,
+      availableAtSlot,
+      unvotedIds,
+      upgradeTarget,
+    });
     await postMaybeNudge({
       session,
       lock: next,
@@ -526,7 +541,14 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
     });
     await scheduleT15ForLock({ session, lock: next, tz: chat.tz });
   } else if (diff.kind === "changed") {
-    await editGameOn({ session, lock: next, roster, availableAtSlot });
+    await editGameOn({
+      session,
+      lock: next,
+      roster,
+      availableAtSlot,
+      unvotedIds,
+      upgradeTarget,
+    });
     await postChangedFollowup({ session, prev: diff.prev, next, roster });
     await postMaybeNudge({
       session,
@@ -543,12 +565,34 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
     // list and the "X players available" suggestion stay current, but
     // skip the `🔄 Party changed` follow-up and the T-15 reschedule
     // since the playing party hasn't moved.
-    await editGameOn({ session, lock: next, roster, availableAtSlot });
+    await editGameOn({
+      session,
+      lock: next,
+      roster,
+      availableAtSlot,
+      unvotedIds,
+      upgradeTarget,
+    });
   } else if (diff.kind === "dissolved") {
     await editGameOnDissolved({ session });
     cancelT15(session.id);
     q.deleteJobsForSession(session.id, "t15");
   }
+}
+
+/**
+ * Next-larger enabled stack above `currentSize`, or null if none. Used to
+ * decide whether to tag unvoted players in GAME ON — there's no point
+ * nudging if the lock is already at the chat's biggest enabled stack.
+ */
+function upgradeStackAbove(
+  currentSize: number | null,
+  validStacks: number[],
+): number | null {
+  if (currentSize === null) return null;
+  const larger = validStacks.filter((s) => s > currentSize);
+  if (larger.length === 0) return null;
+  return Math.min(...larger);
 }
 
 function availableAtSlotFromTallies(tallies: SlotTally[], slot: number): number {
@@ -562,6 +606,8 @@ async function postGameOn(args: {
   lock: LockResult;
   roster: RosterMember[];
   availableAtSlot: number;
+  unvotedIds: number[];
+  upgradeTarget: number | null;
 }): Promise<void> {
   const lateByUserId = q.getLockLate(args.session.id);
   const text = renderGameOn({
@@ -572,6 +618,8 @@ async function postGameOn(args: {
     roster: args.roster,
     lateByUserId,
     availableAtSlot: args.availableAtSlot,
+    unvotedIds: args.unvotedIds,
+    upgradeTarget: args.upgradeTarget,
   });
   const sent = await bot.api.sendMessage(args.session.chat_id, text, {
     parse_mode: "HTML",
@@ -613,6 +661,8 @@ async function editGameOn(args: {
   lock: LockResult;
   roster: RosterMember[];
   availableAtSlot: number;
+  unvotedIds: number[];
+  upgradeTarget: number | null;
 }): Promise<void> {
   if (!args.session.game_on_message_id) {
     await postGameOn(args);
@@ -627,6 +677,8 @@ async function editGameOn(args: {
     roster: args.roster,
     lateByUserId,
     availableAtSlot: args.availableAtSlot,
+    unvotedIds: args.unvotedIds,
+    upgradeTarget: args.upgradeTarget,
   });
   await safeEditMessage({
     chatId: args.session.chat_id,
@@ -675,6 +727,10 @@ export async function refreshGameOnMessage(sessionId: number): Promise<void> {
     const votes = q.getSessionVotes(sessionId);
     const tallies = tallySlots({ slots, votes, rosterIds, skipIds, fillerIds });
     const availableAtSlot = availableAtSlotFromTallies(tallies, lock.slot);
+    const chat = q.getOrCreateChat(session.chat_id);
+    const validStacks = q.parseStacks(chat.valid_stacks);
+    const unvotedIds = unvotedRosterMembers({ votes, rosterIds, skipIds });
+    const upgradeTarget = upgradeStackAbove(lock.size, validStacks);
     const text = renderGameOn({
       slot: lock.slot,
       size: lock.size!,
@@ -683,6 +739,8 @@ export async function refreshGameOnMessage(sessionId: number): Promise<void> {
       roster,
       lateByUserId,
       availableAtSlot,
+      unvotedIds,
+      upgradeTarget,
     });
     await safeEditMessage({
       chatId: session.chat_id,
