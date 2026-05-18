@@ -31,7 +31,7 @@ The target users are adults with shifting evening schedules. The bot's job is to
 | **Roster** | The list of players the bot considers part of this chat. Tagged on `/lfp`, eligible to vote. Defined and edited by chat members. |
 | **Session** | One `/lfp` invocation. Has a slot range, a set of votes, and at most one locked party. |
 | **Slot** | A 30-minute candidate start time within the session's range (e.g., 19:30, 20:00, 20:30…). |
-| **Vote** | A roster member's stance on a slot: ✅ yes / 🤷 maybe / ❌ no. Defaults to "no vote" until cast. Tapping a slot button cycles ✅ → 🤷 → ❌ → ✅ (no "cleared" stop). 🤷 is treated as a *soft yes* for lock evaluation — a 🤷 voter helps complete a stack, but an explicit ✅ voter always takes priority and will bump them to alternate (see §5.4). |
+| **Vote** | A roster member's stance on a slot: ✅ yes / 🤷 maybe / ❌ no. Defaults to "no vote" until cast. Tapping a slot button cycles ✅ → 🤷 → ❌ → ✅ (no "cleared" stop). 🤷 is treated as a *soft yes* for lock evaluation — a 🤷 voter helps complete a stack, but an explicit ✅ voter always takes priority and will bump them to alternate (see §5.4). A roster member who has cast **any** vote in the session is treated as an **implicit ❌** on every slot they didn't vote on — engaging with the poll signals "the slots I didn't pick are slots I can't play." Only fully-unvoted-anywhere members keep contributing to the "not voted yet" math. |
 | **Opener** | The user who ran `/lfp`. Auto-added to the roster (if not already in it) and auto-✅'d on every slot. Tap-to-change works exactly like any other voter. |
 | **Lock** | The bot's declaration that a party is forming at a specific slot, with a specific 5/3/2 size and a specific player list. |
 | **Alternate** | A player who voted yes on the locked slot but wasn't in the first 5. Auto-promoted if a locked player drops. |
@@ -98,13 +98,15 @@ The chat has a **valid-stack set**, configurable via `/lfp-stacks` (see §5.7), 
 
 The bot does **not** hold off locking a smaller stack just because a bigger one is still mathematically possible. If 4 players have ✅'d at 19:30 and a 5th hasn't voted yet, the bot locks the 4-stack right now (when 4 is in the valid-stack set). If that 5th player later votes ✅, re-evaluation upgrades the lock in place to a 5-stack and posts the `🔄 4-stack → 5-stack` follow-up. Lock fast, update on new activity.
 
+When the locked size is **below** the largest enabled stack and there are still roster members who haven't cast a single vote, the GAME ON message tags those players directly with a `🔔 @user1 @user2 — tap ✅ on HH:MM to upgrade to an N-stack` line. That way the people whose ✅ could grow the party are pinged without spamming everyone who already voted ❌ or ✅. The nudge updates with the GAME ON message on every re-evaluation (so it disappears once everyone has voted or the lock has reached the max stack size).
+
 While no actual lock is in effect, the body shows a **tentative-lock footer** when *any* slot has reached the smallest valid stack: `⏳ Could play 3-stack at 19:00 with Karolis, Tomas, Justas — waiting on more votes for a bigger party.` This makes "we could play right now if nobody else shows up" visible without parsing the table. In practice this only appears very early in voting, since the bot otherwise locks whatever's achievable.
 
 The "skip 4-stack" rule from your group's preference is implemented by 4 being absent from the default valid-stack set, not by hardcoded logic. A different chat can enable 4 if they want.
 
 When the bot locks, seats are filled in priority order — **✅ first (by vote-time), then 🤷, then 🛟** — up to the locked stack size. Everyone else who responded on that slot becomes an **alternate**, in the same priority order.
 
-`/lfp-skip @user` marks a roster member as a session-only ❌ — useful for cleaning up the per-voter summary when someone's clearly not playing, but no longer required to unblock a lock since the bot doesn't wait on unvoted players.
+`/lfp-skip @user` marks a roster member as a session-only ❌ — useful for cleaning up the per-voter summary and the upgrade-nudge mentions when someone's clearly not playing tonight. It's no longer required to unblock a lock (the bot doesn't wait on unvoted players) and the implicit-❌ rule already removes engaged-but-skipped users from the "could still upgrade" pool; skip is for fully-unresponsive players that you know are out.
 
 ### 5.5 Lock-in actions
 
@@ -345,6 +347,17 @@ Alternates: @ignas
 ```
 
 The `💡` hint only appears when at least 6 roster members are willing to play the locked slot (✅, 🤷, or 🛟 — see §5.5). With exactly 5 ✅ on the locked slot it's omitted.
+
+When the lock is below the largest enabled stack and one or more roster members still haven't voted at all, GAME ON also tags them with a nudge line:
+
+```
+🔒 GAME ON 19:30 — 4-stack
+@karolis @minvis @dziugas @martynas
+
+🔔 @rokas — tap ✅ on 19:30 to upgrade to a 5-stack.
+
+  [⏰ I'll be 15 min late]
+```
 
 ### T-15 reminder
 

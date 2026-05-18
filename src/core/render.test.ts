@@ -82,6 +82,57 @@ describe("renderGameOn 3v3 suggestion", () => {
   });
 });
 
+describe("renderGameOn upgrade nudge", () => {
+  const roster = [
+    member(1, "Karolis"),
+    member(2, "Tomas"),
+    member(3, "Mantas"),
+    member(4, "Justas"),
+    member(5, "Aurimas"),
+  ];
+
+  it("tags unvoted players when the lock is below the next enabled stack", () => {
+    const out = renderGameOn({
+      slot: 1170,
+      size: 4,
+      coreIds: [1, 2, 3, 4],
+      alternateIds: [],
+      roster,
+      unvotedIds: [5],
+      upgradeTarget: 5,
+    });
+    assert.match(out, /@aurimas/);
+    assert.match(out, /upgrade to a 5-stack/);
+    assert.match(out, /19:30/);
+  });
+
+  it("omits the nudge when the lock is already at the largest enabled stack", () => {
+    const out = renderGameOn({
+      slot: 1170,
+      size: 5,
+      coreIds: [1, 2, 3, 4, 5],
+      alternateIds: [],
+      roster,
+      unvotedIds: [],
+      upgradeTarget: null,
+    });
+    assert.doesNotMatch(out, /upgrade/);
+  });
+
+  it("omits the nudge when no roster members are still pending", () => {
+    const out = renderGameOn({
+      slot: 1170,
+      size: 4,
+      coreIds: [1, 2, 3, 4],
+      alternateIds: [],
+      roster,
+      unvotedIds: [],
+      upgradeTarget: 5,
+    });
+    assert.doesNotMatch(out, /upgrade/);
+  });
+});
+
 describe("T-15 vs Load up wording", () => {
   it("renderT15 keeps the 15-min headline", () => {
     assert.match(renderT15("@a @b"), /15 min — boot up/);
