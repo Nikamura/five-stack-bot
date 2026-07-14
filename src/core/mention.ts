@@ -25,3 +25,22 @@ export function mentionByIds(roster: RosterMember[], ids: number[]): string {
     .map(mention)
     .join(" ");
 }
+
+/** HTML-safe party mentions with any stored lateness shown inline. */
+export function mentionByIdsWithLate(
+  roster: RosterMember[],
+  ids: number[],
+  lateByUserId: Map<number, number>,
+): string {
+  const map = new Map(roster.map((m) => [m.telegram_user_id, m]));
+  return ids
+    .map((id) => {
+      const member = map.get(id);
+      if (!member) return "";
+      const base = mention(member);
+      const late = lateByUserId.get(id);
+      return late && late > 0 ? `${base} <i>(${late} min late)</i>` : base;
+    })
+    .filter(Boolean)
+    .join(" ");
+}

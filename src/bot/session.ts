@@ -17,12 +17,13 @@ import {
   renderLoadUp,
   renderMaybeNudge,
   renderPartyChanged,
+  renderPartyDelayed,
   renderPartyDissolved,
   renderSessionBody,
   renderSessionKeyboard,
   renderT15,
 } from "../core/render.js";
-import { mentionByIds } from "../core/mention.js";
+import { mentionByIds, mentionByIdsWithLate } from "../core/mention.js";
 import { computeArchiveAt, slotInstantMs } from "../core/time.js";
 import { log } from "../log.js";
 import { scheduleArchive, scheduleT15, cancelT15 } from "../scheduler/jobs.js";
@@ -861,13 +862,36 @@ async function fireT15Now(
   });
   const remainingMs = slotMs - Date.now();
   const roster = q.getRoster(session.chat_id);
-  const core = mentionByIds(roster, lock.core);
+  const lateByUserId = q.getLockLate(session.id);
+  const core = mentionByIdsWithLate(roster, lock.core, lateByUserId);
   const text =
     remainingMs >= LOAD_UP_THRESHOLD_MS ? renderT15(core) : renderLoadUp(core);
   await bot.api.sendMessage(session.chat_id, text, {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
   });
+
+  const lateIds = lock.core.filter((id) => (lateByUserId.get(id) ?? 0) > 0);
+  if (lateIds.length === 0) return;
+
+  const readyCount = lock.core.length - lateIds.length;
+  const hasEnabledStack = q
+    .parseStacks(chat.valid_stacks)
+    .some((size) => size <= readyCount);
+  if (hasEnabledStack) return;
+
+  const delayMinutes = Math.max(
+    ...lateIds.map((id) => lateByUserId.get(id) ?? 0),
+  );
+  const lateMentions = mentionByIds(roster, lateIds);
+  await bot.api.sendMessage(
+    session.chat_id,
+    renderPartyDelayed({ readyCount, lateMentions, delayMinutes }),
+    {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    },
+  );
 }
 
 // Used by scheduler:
@@ -960,4 +984,3 @@ async function safeEditMessage(args: SafeEditArgs): Promise<void> {
     log.error("safeEditMessage failed", err);
   }
 }
-

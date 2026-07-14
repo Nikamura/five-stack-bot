@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import {
   renderGameOn,
   renderLoadUp,
+  renderPartyDelayed,
   renderT15,
   THREE_V_THREE_THRESHOLD,
 } from "./render.js";
 import type { RosterMember } from "../db/types.js";
+import { mentionByIdsWithLate } from "./mention.js";
 
 function member(id: number, name: string): RosterMember {
   return {
@@ -142,5 +144,27 @@ describe("T-15 vs Load up wording", () => {
     const out = renderLoadUp("@a @b");
     assert.doesNotMatch(out, /15 min/);
     assert.match(out, /Load up/);
+  });
+
+  it("keeps a late annotation in the T-15 party list", () => {
+    const roster = [member(1, "A"), member(2, "B")];
+    const mentions = mentionByIdsWithLate(
+      roster,
+      [1, 2],
+      new Map([[2, 15]]),
+    );
+    const out = renderT15(mentions);
+    assert.match(out, /@b <i>\(15 min late\)<\/i>/);
+  });
+
+  it("renders a separate delay notice when no enabled stack is ready", () => {
+    const out = renderPartyDelayed({
+      readyCount: 1,
+      lateMentions: "@b @c",
+      delayMinutes: 15,
+    });
+    assert.match(out, /Party delayed 15 min/);
+    assert.match(out, /1 on-time player is not enough/);
+    assert.match(out, /Waiting for @b @c/);
   });
 });

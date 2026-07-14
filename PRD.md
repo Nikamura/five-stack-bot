@@ -112,8 +112,8 @@ When the bot locks, seats are filled in priority order — **✅ first (by vote-
 
 When the bot locks a party, it:
 
-1. **Posts a separate "GAME ON" message** in the chat that `@`-mentions every locked player and names the size and time. Example: `🔒 GAME ON 21:00 — 5-stack: @karolis @tomas @mantas @justas @aurimas`. The session poll continues to live next to it. The GAME ON message carries one inline button: **`[⏰ I'll be 15 min late]`**. A locked player tapping it flags themselves as 15 min late and the message edits in place to annotate them (e.g. `@karolis (15 min late)`); tapping again clears the flag. The button is informational only — it does **not** shift the locked slot or the T-15 reminder. Only locked-party players can flag; non-party taps get a toast. Lateness resets automatically when the lineup changes or the party dissolves. The button only exists while a party is locked.
-2. **Schedules a T-15 reminder** that `@`-mentions the locked players 15 minutes before the slot start time. Example: `⏰ 15 min — boot up. @karolis @tomas @mantas @justas @aurimas`. When the lock shifts to a slot that's already inside the 15-min window (e.g. a re-evaluation at 19:28 jumps the party to 19:30), the reminder fires immediately but switches to a shorter `🚀 Load up — game's starting.` headline so the "15 min" wording isn't misleading 2 min before tip-off.
+1. **Posts a separate "GAME ON" message** in the chat that `@`-mentions every locked player and names the size and time. Example: `🔒 GAME ON 21:00 — 5-stack: @karolis @tomas @mantas @justas @aurimas`. The session poll continues to live next to it. The GAME ON message carries one inline button: **`[⏰ I'll be 15 min late]`**. A locked player tapping it flags themselves as 15 min late and the message edits in place to annotate them (e.g. `@karolis (15 min late)`); tapping again clears the flag. The flag does not move the locked slot or its T-15 job, but it does affect the reminder-time readiness check described below. Only locked-party players can flag; non-party taps get a toast. Lateness resets automatically when the lineup changes or the party dissolves. The button only exists while a party is locked.
+2. **Schedules a T-15 reminder** that `@`-mentions the locked players 15 minutes before the slot start time and preserves each player's late annotation. Example: `⏰ 15 min — boot up. @karolis @tomas (15 min late) @mantas @justas @aurimas`. When one or more core players are late, the bot checks whether the on-time core can still form any enabled stack size. If not, it posts a second message: `⏳ Party delayed 15 min — 1 on-time player is not enough for an enabled stack. Waiting for @tomas @mantas.` When an enabled smaller stack can form, the annotated boot reminder is sufficient and no delay message is posted. When the lock shifts to a slot that's already inside the 15-min window (e.g. a re-evaluation at 19:28 jumps the party to 19:30), the reminder fires immediately but switches to a shorter `🚀 Load up — game's starting.` headline so the "15 min" wording isn't misleading 2 min before tip-off.
 3. **Keeps watching for changes.** If anything below happens, it re-runs §5.4:
    - A locked player flips to ❌ or is removed from the roster.
    - A new ✅ vote arrives that would upgrade a 3-stack to a 5-stack.
@@ -363,7 +363,14 @@ When the lock is below the largest enabled stack and one or more roster members 
 
 ```
 ⏰ 15 min — boot up.
-@karolis @tomas @mantas @justas @aurimas
+@karolis @tomas (15 min late) @mantas @justas @aurimas
+```
+
+If the on-time players cannot form any enabled stack, the bot follows with:
+
+```
+⏳ Party delayed 15 min — 1 on-time player is not enough for an enabled stack.
+Waiting for @tomas @mantas.
 ```
 
 If the lock shifts close to start time (less than 10 min before slot tip-off) the reminder fires immediately with a shorter headline so "15 min" isn't misleading:

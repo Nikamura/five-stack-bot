@@ -3,7 +3,12 @@ import type { LockResult, SlotTally } from "./lock.js";
 import { tentativeLock } from "./lock.js";
 import { compressSlotRanges, formatSlot } from "./slots.js";
 import type { RosterMember, SessionRow } from "../db/types.js";
-import { escapeHtml, mention, mentionList } from "./mention.js";
+import {
+  escapeHtml,
+  mention,
+  mentionByIdsWithLate,
+  mentionList,
+} from "./mention.js";
 import { COMMON_TZS } from "./time.js";
 
 // ============================================================================
@@ -246,14 +251,11 @@ export function renderGameOn(args: {
   upgradeTarget?: number | null;
 }): string {
   const map = new Map(args.roster.map((m) => [m.telegram_user_id, m]));
-  const renderCore = (id: number): string => {
-    const m = map.get(id);
-    if (!m) return "";
-    const base = mention(m);
-    const late = args.lateByUserId?.get(id);
-    return late && late > 0 ? `${base} <i>(${late} min late)</i>` : base;
-  };
-  const coreStr = args.coreIds.map(renderCore).filter(Boolean).join(" ");
+  const coreStr = mentionByIdsWithLate(
+    args.roster,
+    args.coreIds,
+    args.lateByUserId ?? new Map(),
+  );
   const altStr = args.alternateIds
     .map((id) => {
       const m = map.get(id);
@@ -326,6 +328,19 @@ export function renderT15(coreMentions: string): string {
  */
 export function renderLoadUp(coreMentions: string): string {
   return `🚀 Load up — game's starting.\n${coreMentions}`;
+}
+
+export function renderPartyDelayed(args: {
+  readyCount: number;
+  lateMentions: string;
+  delayMinutes: number;
+}): string {
+  const players = args.readyCount === 1 ? "player is" : "players are";
+  return (
+    `⏳ <b>Party delayed ${args.delayMinutes} min</b> — ` +
+    `${args.readyCount} on-time ${players} not enough for an enabled stack.\n` +
+    `Waiting for ${args.lateMentions}.`
+  );
 }
 
 export function renderPartyChanged(line: string): string {
