@@ -1,17 +1,48 @@
 # Mini App deployment on the homelab
 
-V2 was deployed on **2026-09-06 at 10:57:48 UTC**. The HTTPS application and
-`@five_stack_bot` polling are running. At the deployment check, Telegram
-`getMe` still reported `has_main_web_app: false`; Karolis is completing
-BotFather setup. Native Mini App launch and real availability submissions
-have not yet been verified.
+## Current release: manual voting CTA
 
-## Deployed release
+The Mini App and manual CTA were merged and pushed to `main`, then deployed on
+**2026-09-06 at 11:27:26 UTC** from application commit `42a0aed`. Production now
+tracks **`origin/main`**. `/opt/stacks/update.sh` uses `git -C five-stack-bot pull`,
+so future updates follow `main` without an updater-script change.
+
+- Image: `five-stack-bot:cta-42a0aed`, also tagged `five-stack-bot:latest`.
+- Image ID: `sha256:dbd2350a5861288b63e0f2be5377fab27c81d876c3f2e00c618e53e0f4f83b74`.
+- Rollback image: `five-stack-bot:pre-cta-20260906T112617Z`.
+- Backup directory: `/opt/stacks/bots/backups/five-stack-cta-20260906T112617Z`.
+  It contains a consistent SQLite backup, Compose backup, source bundle,
+  container identities and build log. The directory is mode 0700 and database
+  copies are mode 0600. Keep these private backups on the host.
+
+The poll and Mini App group summary share **Remind non-voters**, one current
+CTA and a persisted 15-minute cooldown. Only button presses send voting CTAs;
+legacy automatic jobs are discarded. Choose times opens the signed Mini App
+session, and Can't play tonight submits the existing complete decline.
+
+Verification: all 171 tests, typecheck and build passed; the local demo confirmed
+results-view placement, confirmation and cooldown. HTTPS health returned 200;
+public HTML/JS/CSS matched the release; unauthenticated session, SSE, save and
+reminder endpoints returned 401 with `no-store`. SQLite integrity passed, all
+pre-release vote values/timestamps were unchanged, and no automatic voting jobs
+remained. Telegram polling was online with zero restarts, and `getMe` now reports
+`has_main_web_app: true`. Only the bot was recreated; the other 40 containers
+were unchanged. Authenticated native Telegram delivery still requires a real
+button press; verification did not send a real voting CTA.
+
+To roll this CTA release back, use the recorded pre-CTA image and stop the source
+updater from rebuilding the newer release until the rollback is resolved. Retain
+the current database: this release only adds the `vote_reminders` table.
+
+## Initial V2 deployment
+
+V2 was initially deployed on **2026-09-06 at 10:57:48 UTC**. The following values
+record that earlier cutover and its v1 rollback, not the current release.
 
 | Item | Verified value |
 |---|---|
 | Application commit | `1232967` |
-| Production source branch | `codex/mini-app-v2`, pushed to origin and tracked by the production checkout |
+| Initial source branch | `codex/mini-app-v2`, pushed to origin and tracked by the production checkout |
 | Release image | `five-stack-bot:v2-1232967`, also tagged `five-stack-bot:latest` |
 | Image ID | `sha256:f67f5aaa6f4c5d5adb448931dd2ebf9e0b207202d62a027051237be7f036f5d5` |
 | Rollback image | `five-stack-bot:pre-v2-20260906t105549z` |
@@ -20,9 +51,8 @@ have not yet been verified.
 The permanent Compose file now includes `MINI_APP_URL=https://five-stack-bot.cn.lt`,
 empty `MINI_APP_SHORT_NAME`, `WEB_HOST=0.0.0.0`, and `WEB_PORT=3000`. The bot joins
 `bots_default` and external `caddy_default`, with no published host port. The
-source, Compose and data locations below were retained. The existing Git-pull
-updater follows the checkout's tracked `codex/mini-app-v2` branch; account for
-that branch explicitly before changing the deployment source.
+source, Compose and data locations below were retained. The initial source checkout tracked `codex/mini-app-v2`; the CTA release above
+changed it to `origin/main`.
 
 The standalone [Caddy site](Caddyfile.miniapp) was appended to the existing
 Caddyfile, validated with the complete configuration, and reloaded. The
@@ -42,7 +72,7 @@ Caddy, stayed unchanged. Existing routes and authorization policies were kept.
   declines. No private roster or session data is recorded here.
 - Before deployment, all 161 tests, typecheck, build and structured review passed.
 
-Complete BotFather Main Mini App setup and perform the Telegram checks under
+Main Mini App setup is now enabled. Perform the Telegram checks under
 **Activate and verify** below. These public endpoint checks do not establish that
 a native Telegram launch, authenticated live stream or real vote has succeeded.
 
@@ -70,7 +100,7 @@ The Mini App HTTP server runs in that same process on port 3000.
 
 ## Prepare a future cutover
 
-1. Put the reviewed v2 source in the existing build context. Build the new
+1. Fast-forward the clean production `main` checkout from `origin/main`. Build the new
    image without restarting the service. Record the old image ID and tag it
    `five-stack-bot:pre-v2` for rollback before rebuilding `latest`.
 2. Back up the existing Compose and Caddy files. Take a consistent SQLite
