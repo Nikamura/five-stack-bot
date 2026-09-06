@@ -26,6 +26,7 @@ import { mentionByIds, mentionByIdsWithLate } from "../core/mention.js";
 import { computeArchiveAt, slotInstantMs } from "../core/time.js";
 import { log } from "../log.js";
 import { scheduleArchive, scheduleT15, cancelT15 } from "../scheduler/jobs.js";
+import { syncVoteReminderLocked, refreshVoteReminders } from "./voteReminders.js";
 import type { RosterMember, SessionRow } from "../db/types.js";
 import { config } from "../config.js";
 import { createMiniAppLink } from "../web/auth.js";
@@ -274,6 +275,7 @@ export async function bumpSessionPoll(chatId: number): Promise<boolean> {
       await tryUnpin(fresh.chat_id, oldId);
     }
     await tryPin(fresh.chat_id, sent.message_id);
+    await syncVoteReminderLocked(q.getSession(fresh.id)!);
     return true;
   });
 }
@@ -287,6 +289,7 @@ export async function cancelSession(sessionId: number): Promise<void> {
     cancelT15(sessionId);
     cancelPendingPollEdit(sessionId);
     cancelPendingEvaluation(sessionId);
+    await syncVoteReminderLocked(q.getSession(sessionId)!);
     if (session.poll_message_id) {
       await safeEditMessage({
         chatId: session.chat_id,
@@ -306,6 +309,7 @@ export async function archiveSessionFromScheduler(sessionId: number): Promise<vo
     q.deleteJobsForSession(sessionId);
     cancelPendingPollEdit(sessionId);
     cancelPendingEvaluation(sessionId);
+    await syncVoteReminderLocked(q.getSession(sessionId)!);
     if (session.poll_message_id) {
       const lock = q.getLock(sessionId);
       const tail = lock
@@ -436,6 +440,7 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   if (session.poll_message_id) {
     schedulePollEdit(session.id);
   }
+  await syncVoteReminderLocked(session);
 
   // Side effects per diff.
   if (diff.kind === "new") {
@@ -613,6 +618,7 @@ async function editGameOn(args: {
  * waiting for the next vote or a manual /lfp_bump.
  */
 export async function refreshAllActiveSessions(): Promise<void> {
+  await refreshVoteReminders();
   const sessions = q.listActiveSessions();
   log.info(`Refreshing ${sessions.length} active session message(s) on boot.`);
   for (const session of sessions) {

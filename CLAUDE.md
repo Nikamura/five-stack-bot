@@ -80,3 +80,7 @@ POST requires the configured same origin and bounded JSON. Static files use an e
 - TypeScript is strict with `noUncheckedIndexedAccess` and unused checks; narrow optional lookups.
 - Tests are colocated and use `node:test`/`node:assert`. Exercise real failure boundaries: partial saves, revisions/retries, access control, migration preservation and open-stream updates.
 - Telegram command names use underscores, such as `/lfp_cancel`.
+
+## Voting reminders
+
+Voting CTAs are manual-only. `bot/voteReminders.ts` owns replacement and cleanup; `vote_reminders` retains the message ID and shared 15-minute cooldown across restarts. Its `*Locked` helpers require the session mutex. Legacy automatic voting-reminder jobs are discarded on boot.

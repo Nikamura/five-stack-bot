@@ -74,6 +74,11 @@ function clearTimer(jobId: number): void {
 export async function rehydrateJobs(graceMs: number = 5 * 60 * 1000): Promise<void> {
   const now = Date.now();
   for (const job of q.listJobs()) {
+    // Voting CTAs are manual-only. Discard jobs saved by older versions.
+    if (job.kind === "vote_reminder") {
+      q.deleteJob(job.id);
+      continue;
+    }
     const overdue = now - job.fire_at;
     if (overdue > graceMs) {
       log.warn(`Dropping overdue job ${job.id} (${job.kind}): ${Math.round(overdue / 1000)}s late`);

@@ -143,6 +143,19 @@ export function renderSessionKeyboard(args: {
   if (args.miniAppUrl) kb.url("📅 Set my availability", args.miniAppUrl);
   else kb.text("📅 Set my availability", `app:setup:${args.sessionId}`);
   kb.row().text("🚫 Can’t play tonight", `vbn:${args.sessionId}`);
+  kb.row().text("🔔 Remind non-voters", `vr:${args.sessionId}`);
+  return kb;
+}
+
+export function renderVoteReminder(mentions: string): string {
+  return `🔔 ${mentions} — up for a game tonight?\nPlease choose your times or tap “Can't play tonight”.`;
+}
+
+export function renderVoteReminderKeyboard(sessionId: number, miniAppUrl: string | null): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  if (miniAppUrl) kb.url("🗳 Choose times", miniAppUrl);
+  else kb.text("🗳 Choose times", `app:setup:${sessionId}`);
+  kb.row().text("🚫 Can't play tonight", `vbn:${sessionId}`);
   return kb;
 }
 

@@ -14,6 +14,7 @@ import { slotInstantMs } from "../core/time.js";
 import { ApiError, type MiniAppUser, type SessionSnapshot } from "../web/contracts.js";
 import { withMutex } from "./mutex.js";
 import { queueSessionEvaluation } from "./session.js";
+import { sendVoteReminderLocked, VOTE_REMINDER_INTERVAL_MS } from "./voteReminders.js";
 
 /** Identity comes from verified initData or a Telegram update, never a request-body ID. */
 function requireRosterSession(sessionId: number, user: MiniAppUser): { session: SessionRow; bound: boolean } {
@@ -76,6 +77,7 @@ function snapshot(session: SessionRow, userId: number, now: number): SessionSnap
       validStacks: q.parseStacks(chat.valid_stacks),
     },
     serverNow: now,
+    reminderAvailableAt: reminderAvailableAt(session.id),
     players: roster.map((member) => {
       const playerVotes = votesFor(member.telegram_user_id);
       return {
@@ -130,6 +132,27 @@ export function getAvailabilitySnapshot(sessionId: number, user: MiniAppUser): P
 
 export function saveAvailability(sessionId: number, user: MiniAppUser, input: unknown): Promise<SessionSnapshot> {
   return changeAvailability(sessionId, user, () => input);
+}
+
+function reminderAvailableAt(sessionId: number): number {
+  const reminder = q.getVoteReminder(sessionId);
+  return reminder ? reminder.last_sent_at + VOTE_REMINDER_INTERVAL_MS : 0;
+}
+
+export function remindNonVoters(sessionId: number, user: MiniAppUser): Promise<{ message: string; nextAllowedAt: number }> {
+  return withMutex(`session:${sessionId}`, async () => {
+    const { session, bound } = requireRosterSession(sessionId, user);
+    if (bound) queueSessionEvaluation(sessionId);
+    if (session.archived_at !== null || session.archive_at <= Date.now()) {
+      throw new ApiError(410, "CLOSED", "This session has ended.");
+    }
+    try {
+      const message = await sendVoteReminderLocked(sessionId);
+      return { message, nextAllowedAt: reminderAvailableAt(sessionId) };
+    } catch {
+      throw new ApiError(502, "REMINDER_FAILED", "Could not confirm the reminder. Please try again.");
+    }
+  });
 }
 
 /** A group No button is itself an explicit complete answer; no picker is needed. */

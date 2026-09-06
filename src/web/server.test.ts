@@ -48,6 +48,7 @@ async function fixture(t: TestContext, overrides: Partial<MiniAppServerOptions> 
   let current = snapshot();
   const server = createMiniAppServer({
     botToken: TOKEN, publicUrl: ORIGIN, staticDir,
+    remindNonVoters: async () => ({ message: "Reminded players who haven't voted.", nextAllowedAt: Date.now() + 900_000 }),
     loadSession: async (id, user) => { assert.equal(id, 42); assert.equal(user.id, 12345); return current; },
     saveAvailability: async (id, user, input) => {
       assert.equal(id, 42); assert.equal(user.id, 12345);
@@ -68,6 +69,45 @@ async function fixture(t: TestContext, overrides: Partial<MiniAppServerOptions> 
   });
   return { base, server, headers: { authorization: authorization() }, set: (value: SessionSnapshot) => { current = value; } };
 }
+
+test("manual reminder requires signed identity, same origin and an empty body", async t => {
+  let reminders = 0;
+  const result = { message: "Reminded players who haven't voted.", nextAllowedAt: Date.now() + 900_000 };
+  const { base, headers } = await fixture(t, {
+    remindNonVoters: async (id, user) => {
+      assert.equal(id, 42);
+      assert.equal(user.id, 12345);
+      reminders++;
+      return result;
+    },
+  });
+  const post = (body: string, extraHeaders: Record<string, string>, path = "/api/reminder") =>
+    fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...extraHeaders }, body });
+  assert.equal((await post("{}", { origin: ORIGIN })).status, 401);
+  assert.equal((await post("{}", headers)).status, 403);
+  assert.equal((await post("{}", { ...headers, origin: "https://other.example" })).status, 403);
+  for (const body of ['{"sessionId":43}', '{"userId":99}', "[]", "null", "invalid"]) {
+    assert.equal((await post(body, { ...headers, origin: ORIGIN })).status, 400);
+  }
+  assert.equal((await post("{}", { ...headers, origin: ORIGIN }, "/api/reminder?sessionId=43")).status, 400);
+  assert.equal(reminders, 0);
+  const response = await post("{}", { ...headers, origin: ORIGIN });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), result);
+  assert.equal(reminders, 1);
+});
+
+test("manual reminder propagates membership, closure and send failures", async t => {
+  let error = new ApiError(403, "FORBIDDEN", "Only this group's roster can open its availability.");
+  const { base, headers } = await fixture(t, { remindNonVoters: async () => { throw error; } });
+  for (const [status, code] of [[403, "FORBIDDEN"], [410, "CLOSED"], [502, "REMINDER_FAILED"]] as const) {
+    error = new ApiError(status, code, "Unavailable");
+    const response = await fetch(`${base}/api/reminder`, { method: "POST", headers: { ...headers, origin: ORIGIN, "content-type": "application/json" }, body: "{}" });
+    assert.equal(response.status, status);
+    const body = await response.json() as { error: { code: string } };
+    assert.equal(body.error.code, code);
+  }
+});
 
 test("health and demo HTML are public; live API requires signed Telegram authentication", async t => {
   const { base } = await fixture(t);

@@ -10,6 +10,7 @@ const server = createMiniAppServer({
   publicUrl: `http://127.0.0.1:${port}`,
   loadSession: unavailable,
   saveAvailability: unavailable,
+  remindNonVoters: unavailable,
 });
 server.listen(port, "127.0.0.1", () => console.log(`Preview: http://127.0.0.1:${port}/?demo=1`));
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => server.close());

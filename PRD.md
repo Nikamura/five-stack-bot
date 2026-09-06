@@ -219,3 +219,12 @@ Availability snapshots/mutations and lock processing use a per-session mutex. Mu
 Startup restores future scheduled jobs, fires jobs up to five minutes overdue, and drops older overdue jobs. Pending Telegram updates are not deliberately discarded. Take a consistent SQLite backup through its backup API or `.backup`; copying the live main database file alone can omit data in the WAL.
 
 The bot stays silent when first added until a group member invokes a command. Session history and audit data are retained without automatic deletion; there is no forget command. Logs go to stdout, with no external analytics service.
+
+## Voting reminders
+
+- The poll and Mini App group summary include **🔔 Remind non-voters**. Any group member can use the poll button; Mini App requests require authenticated roster membership. Both entry points share the same CTA and a **15-minute cooldown per session**.
+- Voting reminders are **manual only**, sent when someone presses the button. Opening a session, bumping the poll, waiting or restarting never sends a voting reminder. The Mini App shows sending feedback and the shared remaining cooldown; its demo simulates the action without contacting Telegram. Previously scheduled voting reminders are discarded on boot.
+- A reminder tags only current roster members with **no votes anywhere** in the session, excluding session skips. Anyone who has responded ✅, 🤷 or ❌ is excluded. It offers **🗳 Choose times** and **🚫 Can't play tonight**; the latter saves a complete decline for all remaining starts through the existing availability service. Choose times opens the same signed Mini App session link as the main poll.
+- Keep **one active reminder per session**: remove the previous CTA before sending a fresh message, so eligible players can be notified again. If Telegram rejects deletion, replace its text with a closed notice and remove its buttons. If both cleanup operations fail, do not post another CTA.
+- Vote/roster changes silently refresh the remaining mentions. Remove the CTA when everyone has responded (or been skipped), the largest enabled party is filled, or the session is cancelled/archived/expired; do not send a reminder in those states or after the locked game has started. The signed Choose times link survives poll bumps. Notification delivery follows each player's Telegram settings.
+- Persist the current CTA message ID and last successful send time in SQLite. Cleanup preserves the cooldown; restart refreshes existing CTAs without sending a new notification.

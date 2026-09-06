@@ -31,6 +31,7 @@ export interface SessionSnapshot {
     validStacks: number[];
   };
   serverNow: number;
+  reminderAvailableAt?: number;
   players: PlayerAvailability[];
   slots: Array<{
     minutes: number;

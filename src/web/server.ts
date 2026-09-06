@@ -10,6 +10,7 @@ export interface MiniAppServerOptions {
   publicUrl: string;
   loadSession: (sessionId: number, user: MiniAppUser) => Promise<SessionSnapshot>;
   saveAvailability: (sessionId: number, user: MiniAppUser, input: unknown) => Promise<SessionSnapshot>;
+  remindNonVoters: (sessionId: number, user: MiniAppUser) => Promise<{ message: string; nextAllowedAt: number }>;
   staticDir?: string;
 }
 
@@ -224,6 +225,14 @@ export function createMiniAppServer(options: MiniAppServerOptions): Server {
         limit(identity.user.id, true);
         const input = await readJson(request);
         json(response, 200, await options.saveAvailability(identity.sessionId, identity.user, input));
+      } else if (rawPath === "/api/reminder" && request.method === "POST") {
+        if (request.headers.origin !== publicOrigin) throw new ApiError(403, "ORIGIN", "A same-origin request is required.");
+        limit(identity.user.id, true);
+        const input = await readJson(request);
+        if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 0) {
+          throw new ApiError(400, "INVALID_INPUT", "Reminder requests must be an empty JSON object.");
+        }
+        json(response, 200, await options.remindNonVoters(identity.sessionId, identity.user));
       } else if (rawPath === "/api/session" && request.method === "GET") {
         limit(identity.user.id, false);
         json(response, 200, await options.loadSession(identity.sessionId, identity.user));

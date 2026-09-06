@@ -571,6 +571,29 @@ export function deleteJobsForSession(sessionId: number, kind?: string): void {
   }
 }
 
+// -- Voting reminders ---------------------------------------------------------
+
+export function getVoteReminder(sessionId: number): { message_id: number | null; last_sent_at: number } | undefined {
+  return db.prepare("SELECT message_id, last_sent_at FROM vote_reminders WHERE session_id = ?")
+    .get(sessionId) as { message_id: number | null; last_sent_at: number } | undefined;
+}
+
+export function setVoteReminder(sessionId: number, messageId: number, sentAt: number): void {
+  db.prepare(`INSERT INTO vote_reminders (session_id, message_id, last_sent_at) VALUES (?, ?, ?)
+    ON CONFLICT(session_id) DO UPDATE SET message_id = excluded.message_id, last_sent_at = excluded.last_sent_at`)
+    .run(sessionId, messageId, sentAt);
+}
+
+export function clearVoteReminderMessage(sessionId: number): void {
+  // Keep the timestamp: answering or removing a CTA must not reset its cooldown.
+  db.prepare("UPDATE vote_reminders SET message_id = NULL WHERE session_id = ?").run(sessionId);
+}
+
+export function listVoteReminderSessionIds(): number[] {
+  return (db.prepare("SELECT session_id FROM vote_reminders WHERE message_id IS NOT NULL")
+    .all() as { session_id: number }[]).map(row => row.session_id);
+}
+
 // -- Audit --------------------------------------------------------------------
 
 export function audit(

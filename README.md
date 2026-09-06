@@ -118,3 +118,15 @@ src/web/       Shared API contracts, Telegram authentication, HTTP/SSE server an
 src/scheduler/ Persisted archive and reminder jobs
 web/           Mini App HTML/CSS/JS, draft model, SSE decoder and isolated demo
 ```
+
+## Voting reminders
+
+The **🔔 Remind non-voters** button in the poll and Mini App group summary posts a fresh reminder tagging only
+players who haven't responded. It includes **🗳 Choose times** and
+**🚫 Can't play tonight**, which declines all remaining starts in one tap.
+
+Voting reminders are sent only when someone presses the button, with a shared
+15-minute cooldown between reminders. There are no automatic voting reminders.
+Each fresh reminder removes the previous CTA. It disappears when everyone
+has responded, the largest enabled party fills, or the session ends.
+The message ID and cooldown survive restarts.

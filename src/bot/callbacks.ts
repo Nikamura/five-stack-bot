@@ -27,6 +27,7 @@ import { log } from "../log.js";
 import { renderSessionKeyboard } from "../core/render.js";
 import { declineAvailability } from "./availability.js";
 import { ApiError } from "../web/contracts.js";
+import { sendVoteReminder } from "./voteReminders.js";
 
 // ----------------------------------------------------------------------------
 // Wizard
@@ -94,6 +95,18 @@ bot.callbackQuery(/^lfp:wcancel$/, async (ctx) => {
 // ----------------------------------------------------------------------------
 // Voting (slot tap, bulk no, cancel session)
 // ----------------------------------------------------------------------------
+
+// Manual CTA: group and Mini App requests share one persisted cooldown.
+bot.callbackQuery(/^vr:(\d+)$/, async (ctx) => {
+  if (!ctx.chat || !["group", "supergroup"].includes(ctx.chat.type)) return ctx.answerCallbackQuery();
+  try {
+    const text = await sendVoteReminder(Number(ctx.match[1]), ctx.chat.id);
+    await ctx.answerCallbackQuery({ text });
+  } catch (error) {
+    log.warn("Voting reminder failed", error);
+    await ctx.answerCallbackQuery({ text: "Couldn't post the reminder. Please try again." }).catch(() => {});
+  }
+});
 
 // Old messages are upgraded in place instead of applying a partial v1 vote.
 bot.callbackQuery(/^(?:v|v2|vbay|vfill):(\d+)(?::\d+)?$/, async (ctx) => {

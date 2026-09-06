@@ -6,7 +6,7 @@ import "./bot/commands.js";
 import "./bot/callbacks.js";
 import { rehydrateJobs } from "./scheduler/jobs.js";
 import { refreshAllActiveSessions } from "./bot/session.js";
-import { getAvailabilitySnapshot, saveAvailability } from "./bot/availability.js";
+import { getAvailabilitySnapshot, saveAvailability, remindNonVoters } from "./bot/availability.js";
 import { createMiniAppServer } from "./web/server.js";
 
 setLogLevel(config.logLevel);
@@ -23,6 +23,7 @@ async function main() {
     publicUrl: config.miniAppUrl || `http://127.0.0.1:${config.webPort}`,
     loadSession: getAvailabilitySnapshot,
     saveAvailability,
+    remindNonVoters,
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

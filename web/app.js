@@ -14,6 +14,7 @@ const state = {
   streamAttempt: 0, streamGeneration: 0, refreshPromise: null, demo: null,
   rangeSelection: { rangeMode: true, anchor: null },
   showingResults: null, groupDetailsWereOpen: false,
+  reminding: false, demoReminderAvailableAt: 0,
 };
 
 function now() { return state.serverAnchor + performance.now() - state.clockAnchor; }
@@ -325,6 +326,43 @@ function renderShared() {
   $('saved-note').textContent = closed() ? 'This session has ended.' : snapshot.me.skipped ? 'Edit to join the session again.' : demoMode ? 'Demo only · Group updates are simulated.' : 'Saved. Group replies update live below.';
   $('edit').disabled = closed() || state.fatal;
   $('edit').textContent = snapshot.me.responded || snapshot.me.skipped ? 'Edit availability' : 'Set my availability';
+  renderReminder();
+}
+
+function renderReminder() {
+  if (!state.snapshot) return;
+  const pending = state.snapshot.players.filter(player => !player.responded && !player.skipped).length;
+  const full = state.snapshot.lock && state.snapshot.lock.size >= Math.max(...state.snapshot.session.validStacks);
+  const started = state.snapshot.lock && state.snapshot.slots.some(slot => slot.minutes === state.snapshot.lock.slot && slot.startsAt <= now());
+  $('reminder-controls').hidden = closed() || !pending || Boolean(full) || Boolean(started);
+  const availableAt = demoMode ? state.demoReminderAvailableAt : state.snapshot.reminderAvailableAt || 0;
+  const minutes = Math.max(0, Math.ceil((availableAt - now()) / 60_000));
+  $('remind-non-voters').disabled = state.reminding || state.fatal || minutes > 0;
+  $('remind-non-voters').textContent = state.reminding ? 'Sending reminder…' : '🔔 Remind non-voters';
+  $('reminder-hint').textContent = minutes > 0 ? `Remind again in ${minutes} min.` : `Nudge ${pending} ${pending === 1 ? 'person who hasn’t' : 'people who haven’t'} answered in the group chat.`;
+}
+
+async function remindNonVoters() {
+  if (!state.snapshot || closed() || state.reminding || state.fatal || $('remind-non-voters').disabled) return;
+  state.reminding = true;
+  $('reminder-status').hidden = true;
+  renderReminder();
+  try {
+    const result = demoMode
+      ? { message: 'Demo reminder sent. No real message was posted.', nextAllowedAt: now() + 15 * 60_000 }
+      : await request('/api/reminder', {});
+    if (demoMode) state.demoReminderAvailableAt = result.nextAllowedAt;
+    else state.snapshot.reminderAvailableAt = result.nextAllowedAt;
+    $('reminder-status').textContent = result.message;
+    announce(result.message);
+  } catch (error) {
+    if (isAuthorizationError(error)) authFailure(error);
+    $('reminder-status').textContent = error.name === 'AbortError' ? 'Could not confirm the reminder. Try again to check.' : error.message;
+  } finally {
+    state.reminding = false;
+    $('reminder-status').hidden = false;
+    renderReminder();
+  }
 }
 
 function renderLineups() {
@@ -589,6 +627,7 @@ function confirmDiscard(onConfirm) {
 }
 
 $('availability-form').addEventListener('submit', (event) => { event.preventDefault(); save(); });
+$('remind-non-voters').addEventListener('click', remindNonVoters);
 for (const button of document.querySelectorAll('[data-mode]')) button.addEventListener('click', () => {
   state.draft.mode = button.dataset.mode;
   state.rangeSelection = selectionFromDraft(state.draft);

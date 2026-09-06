@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(chat_id, archived_at);
 
+CREATE TABLE IF NOT EXISTS vote_reminders (
+  session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  message_id INTEGER,
+  last_sent_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS votes (
   session_id        INTEGER NOT NULL,
   telegram_user_id  INTEGER NOT NULL,
