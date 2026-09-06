@@ -32,10 +32,26 @@ export function createDemo() {
         yesUserIds, maybeUserIds, fillerUserIds,
       };
     });
+    // Demo-only planning from simulated saved answers, for the multi-party preview.
+    const parties = [];
+    for (const slot of slots) {
+      const ranked = [...slot.yesUserIds, ...slot.maybeUserIds, ...slot.fillerUserIds];
+      const size = session.validStacks.find(size => size <= ranked.length);
+      if (!size) continue;
+      const core = ranked.slice(0, size);
+      const entry = { slot: slot.minutes, endSlot: slot.minutes + 30, size, core,
+        maybeIds: core.filter(id => slot.maybeUserIds.includes(id)),
+        fillerIds: core.filter(id => slot.fillerUserIds.includes(id)) };
+      const last = parties.at(-1);
+      const key = p => JSON.stringify([p.core, p.maybeIds, p.fillerIds]);
+      if (last?.endSlot === entry.slot && key(last) === key(entry)) last.endSlot = entry.endSlot;
+      else parties.push(entry);
+    }
     return structuredClone({
       session, serverNow: serverStart + performance.now() - startedAt, players, slots,
       me: { id: 1, revision: `demo-${revision}`, responded: players[0].responded, skipped: false, filler: players[0].filler, votes: players[0].votes },
-      lock: null,
+      parties,
+      lock: parties[0] ? { ...parties[0], alternates: [] } : null,
     });
   }
   return {

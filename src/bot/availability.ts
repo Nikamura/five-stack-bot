@@ -13,7 +13,7 @@ import { tallySlots } from "../core/lock.js";
 import { slotInstantMs } from "../core/time.js";
 import { ApiError, type MiniAppUser, type SessionSnapshot } from "../web/contracts.js";
 import { withMutex } from "./mutex.js";
-import { queueSessionEvaluation } from "./session.js";
+import { queueSessionEvaluation, reconcilePartyPlanLocked } from "./session.js";
 import { sendVoteReminderLocked, VOTE_REMINDER_INTERVAL_MS } from "./voteReminders.js";
 
 /** Identity comes from verified initData or a Telegram update, never a request-body ID. */
@@ -78,6 +78,7 @@ function snapshot(session: SessionRow, userId: number, now: number): SessionSnap
     },
     serverNow: now,
     reminderAvailableAt: reminderAvailableAt(session.id),
+    parties: q.getPartyPlan(session.id),
     players: roster.map((member) => {
       const playerVotes = votesFor(member.telegram_user_id);
       return {
@@ -210,7 +211,8 @@ function commitAvailability(session: SessionRow, userId: number, input: unknown,
   if (submission.expectedRevision !== revision(currentVotes, currentFiller, skipped)) {
     throw new ApiError(409, "CONFLICT", "Your saved availability changed elsewhere. Review it before saving again.");
   }
-  q.saveUserAvailability({ sessionId, userId, votes: completeVotes, filler: submission.filler });
+  q.saveUserAvailability({ sessionId, userId, votes: completeVotes, filler: submission.filler,
+    onSaved: () => reconcilePartyPlanLocked(session, now) });
   onChange();
   return snapshot(session, userId, now);
 }

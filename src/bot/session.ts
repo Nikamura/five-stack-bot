@@ -6,13 +6,15 @@ import * as q from "../db/queries.js";
 import type { LockResult, SlotTally } from "../core/lock.js";
 import {
   diffLock,
-  evaluateLock,
+  buildPartyPlan,
+  partyPlanKey,
   tallySlots,
   unvotedRosterMembers,
 } from "../core/lock.js";
 import { buildSlots } from "../core/slots.js";
 import {
   renderGameOn,
+  renderPartyWindows,
   renderGameOnKeyboard,
   renderLoadUp,
   renderMaybeNudge,
@@ -26,7 +28,7 @@ import {
 import { mentionByIds, mentionByIdsWithLate } from "../core/mention.js";
 import { computeArchiveAt, slotInstantMs } from "../core/time.js";
 import { log } from "../log.js";
-import { scheduleArchive, scheduleT15, cancelT15 } from "../scheduler/jobs.js";
+import { scheduleArchive, syncPartyTimers, cancelT15 } from "../scheduler/jobs.js";
 import { syncVoteReminderLocked, refreshVoteReminders } from "./voteReminders.js";
 import type { RosterMember, SessionRow } from "../db/types.js";
 import { config } from "../config.js";
@@ -222,6 +224,7 @@ export async function markSkip(args: {
     const session = q.getSession(args.sessionId);
     if (!session || session.archived_at !== null) throw new SessionGone();
     q.addSkip(args.sessionId, args.userId);
+    reconcilePartyPlanLocked(session, Date.now());
     scheduleEvaluation(args.sessionId);
   });
 }
@@ -288,8 +291,8 @@ export async function cancelSession(sessionId: number): Promise<void> {
     const session = q.getSession(sessionId);
     if (!session || session.archived_at !== null) return;
     q.archiveSession(sessionId);
-    q.deleteJobsForSession(sessionId);
     cancelT15(sessionId);
+    q.deleteJobsForSession(sessionId);
     cancelPendingPollEdit(sessionId);
     cancelPendingEvaluation(sessionId);
     await syncVoteReminderLocked(q.getSession(sessionId)!);
@@ -309,6 +312,7 @@ export async function archiveSessionFromScheduler(sessionId: number): Promise<vo
     const session = q.getSession(sessionId);
     if (!session || session.archived_at !== null) return;
     q.archiveSession(sessionId);
+    cancelT15(sessionId);
     q.deleteJobsForSession(sessionId);
     cancelPendingPollEdit(sessionId);
     cancelPendingEvaluation(sessionId);
@@ -370,6 +374,7 @@ function renderSessionMessage(
     fillerIds,
     totalSlots: slots.length,
     spectatorCount: spectatorIds.size,
+    parties: q.getPartyPlan(session.id),
   });
   if (opts?.archivedSuffix) body += opts.archivedSuffix;
   // Both group actions resolve the session by ID; saves validate future times.
@@ -394,6 +399,23 @@ function currentLock(sessionId: number): LockResult | null {
   };
 }
 
+/** Persist accepted availability before it can cross a start boundary. Caller owns mutex.
+ * Called inside the availability transaction; notifications remain debounced.
+ */
+export function reconcilePartyPlanLocked(session: SessionRow, now: number): import("../core/lock.js").PartyWindow[] {
+  const chat = q.getOrCreateChat(session.chat_id);
+  const tallies = tallySlots({ slots: buildSlots(session.start_minutes, session.end_minutes), votes: q.getSessionVotes(session.id),
+    rosterIds: q.getRosterIds(session.chat_id), skipIds: q.getSkips(session.id), fillerIds: q.getFillers(session.id) });
+  const cutoff = tallies.find(t => slotInstantMs({ slotMinutes:t.slot, tz:chat.tz, nowMs:session.opened_at }) > now)?.slot ?? session.end_minutes;
+  const prev = currentLock(session.id);
+  const history = q.hasPartyPlan(session.id) || prev?.slot == null ? q.getPartyPlan(session.id) : [{
+    ...prev, slot:prev.slot, endSlot:prev.slot+30, size:prev.size!, maybeIds:[], fillerIds:[],
+  }];
+  const plan = buildPartyPlan({ tallies, validStacks:q.parseStacks(chat.valid_stacks), firstFutureSlot:cutoff, previous:history });
+  q.savePartyPlan(session.id,plan);
+  return plan;
+}
+
 async function evaluateAndApply(session: SessionRow): Promise<void> {
   const chat = q.getOrCreateChat(session.chat_id);
   const slots = buildSlots(session.start_minutes, session.end_minutes);
@@ -407,12 +429,18 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   const futureTallies = tallies.filter((t) => slotInstantMs({
     slotMinutes: t.slot, tz: chat.tz, nowMs: session.opened_at,
   }) > Date.now());
-  const next = evaluateLock({ tallies: futureTallies, validStacks });
   const prev = currentLock(session.id);
+  const previousPlan = q.getNotifiedPartyPlan(session.id);
+  const plan = reconcilePartyPlanLocked(session, Date.now());
+  const first = plan[0];
+  const next: LockResult = first ? { slot: first.slot, size: first.size, core: first.core, alternates: first.alternates }
+    : { slot: null, size: null, core: [], alternates: [] };
+  const planChanged = partyPlanKey(previousPlan) !== partyPlanKey(plan);
   const diff = diffLock(prev, next);
   const availableAtSlot =
     next.slot !== null ? availableAtSlotFromTallies(tallies, next.slot) : 0;
-  const unvotedIds = unvotedRosterMembers({ votes, rosterIds, skipIds });
+  const started = next.slot !== null && !futureTallies.some(t => t.slot === next.slot);
+  const unvotedIds = started ? [] : unvotedRosterMembers({ votes, rosterIds, skipIds });
   const upgradeTarget = upgradeStackAbove(next.size, validStacks);
 
   // Persist new lock state.
@@ -445,6 +473,9 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   }
   await syncVoteReminderLocked(session);
 
+  // Timers persist before Telegram sends, including immediate reminder attempts.
+  await syncPartyReminders(session, plan);
+
   // Side effects per diff.
   if (diff.kind === "new") {
     await postGameOn({
@@ -462,7 +493,7 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
       tallies,
       previouslyNudged: new Set(),
     });
-    await scheduleT15ForLock({ session, lock: next, tz: chat.tz });
+
   } else if (diff.kind === "changed") {
     await editGameOn({
       session,
@@ -480,9 +511,8 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
       tallies,
       previouslyNudged: new Set(diff.prev.core),
     });
-    cancelT15(session.id);
-    q.deleteJobsForSession(session.id, "t15");
-    await scheduleT15ForLock({ session, lock: next, tz: chat.tz });
+
+
   } else if (diff.kind === "alternates-changed") {
     // Core lineup unchanged — refresh GAME ON in place so the alternates
     // list and the "X players available" suggestion stay current, but
@@ -498,13 +528,26 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
     });
   } else if (diff.kind === "dissolved") {
     await editGameOnDissolved({ session });
-    cancelT15(session.id);
-    q.deleteJobsForSession(session.id, "t15");
+
   } else if (next.slot !== null) {
     // A saved No can remove an upgrade nudge without changing the party.
     // Refresh silently; unchanged locks keep their reminder and emit no post.
     await editGameOn({ session, lock: next, roster, availableAtSlot, unvotedIds, upgradeTarget });
   }
+  if (planChanged && previousPlan.length && (diff.kind === "unchanged" || diff.kind === "alternates-changed")) {
+    const upcoming = plan.filter(p => slotInstantMs({ slotMinutes: p.endSlot - 30, tz: chat.tz, nowMs: session.opened_at }) > Date.now());
+    const text = upcoming.length ? renderPartyWindows(upcoming, roster).join("\n") : "No later parties currently have enough saved availability.";
+    await bot.api.sendMessage(session.chat_id, `📅 <b>Party plan updated</b>\n${text}`, { parse_mode: "HTML" });
+  }
+  const maybePrompts: string[] = [];
+  for (const party of plan.slice(1)) {
+    if (slotInstantMs({ slotMinutes:party.slot,tz:chat.tz,nowMs:session.opened_at }) <= Date.now()) continue;
+    const previous = previousPlan.find(p => p.slot <= party.slot && p.endSlot > party.slot);
+    const newlySeated = party.maybeIds.filter(id => !previous?.maybeIds.includes(id));
+    if (newlySeated.length) maybePrompts.push(`🤷 ${mentionByIds(roster,newlySeated)} — for the ${formatSlotMm(party.slot)} party, open your availability and Save Yes to confirm.`);
+  }
+  if (maybePrompts.length) await bot.api.sendMessage(session.chat_id,maybePrompts.join("\n"),{parse_mode:"HTML"});
+  q.saveNotifiedPartyPlan(session.id, plan);
 }
 
 /**
@@ -544,6 +587,7 @@ async function postGameOn(args: {
     alternateIds: args.lock.alternates,
     roster: args.roster,
     lateByUserId,
+    parties: q.getPartyPlan(args.session.id),
     availableAtSlot: args.availableAtSlot,
     unvotedIds: args.unvotedIds,
     upgradeTarget: args.upgradeTarget,
@@ -603,6 +647,7 @@ async function editGameOn(args: {
     alternateIds: args.lock.alternates,
     roster: args.roster,
     lateByUserId,
+    parties: q.getPartyPlan(args.session.id),
     availableAtSlot: args.availableAtSlot,
     unvotedIds: args.unvotedIds,
     upgradeTarget: args.upgradeTarget,
@@ -632,6 +677,7 @@ export async function refreshAllActiveSessions(): Promise<void> {
         await archiveSessionFromScheduler(session.id);
         continue;
       }
+      await refreshActiveSession(session.chat_id);
       cancelPendingPollEdit(session.id);
       await flushPollEdit(session.id);
       await refreshGameOnMessage(session.id);
@@ -663,7 +709,8 @@ export async function refreshGameOnMessage(sessionId: number): Promise<void> {
     const availableAtSlot = availableAtSlotFromTallies(tallies, lock.slot);
     const chat = q.getOrCreateChat(session.chat_id);
     const validStacks = q.parseStacks(chat.valid_stacks);
-    const unvotedIds = unvotedRosterMembers({ votes, rosterIds, skipIds });
+    const started = slotInstantMs({ slotMinutes:lock.slot,tz:chat.tz,nowMs:session.opened_at }) <= Date.now();
+    const unvotedIds = started ? [] : unvotedRosterMembers({ votes, rosterIds, skipIds });
     const upgradeTarget = upgradeStackAbove(lock.size, validStacks);
     const text = renderGameOn({
       slot: lock.slot,
@@ -672,6 +719,7 @@ export async function refreshGameOnMessage(sessionId: number): Promise<void> {
       alternateIds: lock.alternates,
       roster,
       lateByUserId,
+      parties: q.getPartyPlan(sessionId),
       availableAtSlot,
       unvotedIds,
       upgradeTarget,
@@ -725,20 +773,46 @@ async function editGameOnDissolved(args: { session: SessionRow }): Promise<void>
   q.setSessionGameOnMessage(args.session.id, null);
 }
 
-async function scheduleT15ForLock(args: {
-  session: SessionRow;
-  lock: LockResult;
-  tz: string;
-}): Promise<void> {
-  const fireAt =
-    slotInstantMs({ slotMinutes: args.lock.slot!, tz: args.tz, nowMs: Date.now() }) -
-    15 * 60 * 1000;
-  if (fireAt <= Date.now() + 5_000) {
-    // Past or imminent — fire immediately.
-    await fireT15Now(args.session, args.lock);
-    return;
+async function syncPartyReminders(session: SessionRow, plan: import("../core/lock.js").PartyWindow[]): Promise<void> {
+  const tz = q.getOrCreateChat(session.chat_id).tz;
+  const pending: { slot: number; fireAt: number }[] = [];
+  const immediate: number[] = [];
+  for (const party of plan) {
+    const startsAt = slotInstantMs({ slotMinutes: party.slot, tz, nowMs: session.opened_at });
+    if (startsAt <= Date.now() || q.partyReminderAttempted(session.id, party.slot)) continue;
+    const fireAt = startsAt - 15 * 60_000;
+    if (fireAt <= Date.now() + 5000) immediate.push(party.slot);
+    else pending.push({ slot: party.slot, fireAt });
   }
-  await scheduleT15(args.session.id, fireAt);
+  syncPartyTimers(session.id, pending);
+  for (const slot of immediate) {
+    try { await firePartyT15Locked(session, slot); }
+    catch (error) { log.warn(`Party reminder failed for ${session.id}:${slot}`, error); }
+  }
+}
+
+async function firePartyT15Locked(session: SessionRow, slot: number): Promise<void> {
+  if (session.archived_at !== null || session.archive_at <= Date.now()) return;
+  const party = q.getPartyPlan(session.id).find(p => p.slot === slot);
+  if (!party) return;
+  const startsAt = slotInstantMs({ slotMinutes: slot, tz: q.getOrCreateChat(session.chat_id).tz, nowMs: session.opened_at });
+  if (startsAt - 15 * 60_000 > Date.now() + 5000 || startsAt + 5 * 60_000 < Date.now() || !q.claimPartyReminder(session.id, slot)) return;
+  if (q.getLock(session.id)?.slot_minutes === slot) await fireT15Now(session, party);
+  else {
+    const roster = q.getRoster(session.chat_id);
+    const conditional = party.maybeIds.length || party.fillerIds.length ? " (includes maybe / if-needed players)" : "";
+    await bot.api.sendMessage(session.chat_id,
+      `⏰ ${formatSlotMm(slot)} — ${party.size}-stack${conditional}\n${mentionByIds(roster, party.core)}`, { parse_mode: "HTML" });
+  }
+}
+export async function firePartyT15(sessionId: number, slot: number): Promise<void> {
+  await withMutex(`session:${sessionId}`, async () => {
+    const session = q.getSession(sessionId);
+    if (!session || session.archived_at !== null) return;
+    // Reconcile any recently saved answers before using the scheduled window.
+    await evaluateAndApply(session);
+    await firePartyT15Locked(q.getSession(sessionId)!, slot);
+  });
 }
 
 /** Threshold below which "15 min — boot up" feels wrong and we use "load up". */
@@ -752,7 +826,7 @@ async function fireT15Now(
   const slotMs = slotInstantMs({
     slotMinutes: lock.slot!,
     tz: chat.tz,
-    nowMs: Date.now(),
+    nowMs: session.opened_at,
   });
   const remainingMs = slotMs - Date.now();
   const roster = q.getRoster(session.chat_id);
@@ -793,9 +867,10 @@ export async function fireT15(sessionId: number): Promise<void> {
   await withMutex(`session:${sessionId}`, async () => {
     const session = q.getSession(sessionId);
     if (!session || session.archived_at !== null) return;
+    await evaluateAndApply(session);
     const lock = currentLock(sessionId);
     if (!lock || lock.slot === null) return;
-    await fireT15Now(session, lock);
+    if (q.claimPartyReminder(sessionId, lock.slot)) await fireT15Now(session, lock);
   });
 }
 

@@ -105,6 +105,18 @@ CREATE TABLE IF NOT EXISTS scheduled_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_fire_at ON scheduled_jobs(fire_at);
 
+CREATE TABLE IF NOT EXISTS session_party_plans (
+  session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  plan_json TEXT NOT NULL,
+  notified_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS party_reminder_attempts (
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  slot_minutes INTEGER NOT NULL,
+  attempted_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, slot_minutes)
+);
+
 CREATE TABLE IF NOT EXISTS riot_links (
   chat_id INTEGER NOT NULL,
   telegram_user_id INTEGER NOT NULL,

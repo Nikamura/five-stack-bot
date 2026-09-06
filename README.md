@@ -93,9 +93,11 @@ When `MINI_APP_URL` is unset, **Set my availability** displays a setup notice. S
 
 ## Party selection
 
-After each saved answer, the bot evaluates enabled party sizes largest-first. For each size it first chooses the earliest future start with enough **Yes** responses. If none exists, it chooses the earliest start where **Yes + Maybe + Only if needed** completes that size. It then tries the next smaller enabled size.
+After each saved answer, the bot chooses the **earliest playable start**, then the largest enabled party at that start. A later larger party never delays the early group. Seats still go to **Yes**, then **Maybe**, then **Only if needed**, using vote time within each category.
 
-It locks the largest party achievable now without waiting for unanswered players. A later answer can upgrade, move or dissolve the party. Seats go to **Yes**, then **Maybe**, then **Only if needed**, using vote time within each group. A larger party using maybes/fillers takes priority over a smaller confirmed party; at the same size, an all-Yes start takes priority over an earlier soft start.
+One search can contain several independent parties. Consecutive starts with the same lineup are grouped into a window; a gap or lineup change creates another entry. For example, three can start at 15:30, four at 16:30 (including a filler), and five at 17:30. Separate afternoon and evening trios also appear separately. Counts use each start's saved answers, so players who cannot join later are not carried forward. Windows list candidate starts, not guaranteed game durations.
+
+Telegram and the Mini App show the plan and conditional players. Each window gets its own T-15 reminder; edits replace obsolete timers and persistent attempt records prevent repeated reminder sends across restarts. Already-started parties stay in the plan as history. The existing lateness button and `/lfp_stats` still refer to the first party.
 
 Default sizes are 5/3/2. GAME ON announcements, alternates, maybe-confirmation nudges, T-15 reminders, 15-minute lateness flags and the six-player 3v3 suggestion remain available.
 

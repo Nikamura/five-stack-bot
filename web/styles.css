@@ -178,3 +178,7 @@ select { appearance: auto; border: 1px solid var(--line); border-radius: 9px; wi
   .time-grid { gap: 6px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; } }
+
+.party-windows { margin: 1rem 0; }
+.party-window { padding: .65rem 0; border-bottom: 1px solid var(--line); }
+.party-window p { margin: .3rem 0 0; }

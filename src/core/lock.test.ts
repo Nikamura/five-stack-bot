@@ -516,7 +516,7 @@ describe("nextVote 3-state cycle", () => {
 
 describe("tentativeLock", () => {
   const stacks = [5, 3, 2];
-  it("returns the largest reachable stack at the earliest slot", () => {
+  it("returns the earliest playable stack without waiting for a larger one", () => {
     const slots = [1080, 1110];
     // 2 yes at 18:00; 3 yes at 18:30 — 3-stack reachable at 18:30, 2 at 18:00.
     const t = tallySlots({
@@ -533,8 +533,8 @@ describe("tentativeLock", () => {
       fillerIds: new Set(),
     });
     const tent = tentativeLock({ tallies: t, validStacks: stacks });
-    assert.equal(tent?.size, 3);
-    assert.equal(tent?.slot, 1110);
+    assert.equal(tent?.size, 2);
+    assert.equal(tent?.slot, 1080);
   });
   it("returns null when no slot reaches even the smallest stack", () => {
     const t = tallySlots({

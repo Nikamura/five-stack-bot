@@ -61,9 +61,11 @@ Save commits the complete database answer, queues evaluation once, and returns t
 
 ## Lock evaluation
 
-`evaluateLock` walks enabled sizes largest-first (default 5/3/2). At each size it first takes the earliest future slot with enough normal Yes votes, then the earliest slot where Yes + Maybe + filler reaches that size. Otherwise it immediately tries the next smaller size; unanswered players never block a smaller achievable party.
+`evaluateLock` chooses the earliest playable start and the largest enabled party at that start (default sizes 5/3/2). It never delays an early playable party for a later larger or more certain one. Seats rank Yes, Maybe, filler, then vote time within each category.
 
-At the same size, an all-Yes start wins over an earlier soft start. A larger soft party wins over a smaller all-Yes party. Seats rank Yes, Maybe, filler, ordered by vote time within categories. Available leftovers are alternates. Session skips count as No. Preserve existing reminder, lateness, maybe nudge, upgrade nudge and alternates-only notification behavior.
+`buildPartyPlan` evaluates each saved start independently and groups consecutive starts with the same playing lineup and conditional participants. A gap or a lineup/size/condition change creates a separate party, including two separate 3-stacks. Persist `session_party_plans` in the availability transaction before notification debounce; maintain a separate last-notified plan and rebind participant IDs in both JSON fields. Preserve already-started slots as history and recompute future slots. Never carry someone forward without a saved answer at that later start. The earliest party is retained in `locks` for existing session statistics and first-party lateness controls; Telegram and the Mini App also display the full plan.
+
+Each window gets one T-15 reminder. `party_reminder_attempts` claims a session/start before sending, and `syncPartyTimers` retains unchanged jobs and removes obsolete ones. Recheck current plans under the session mutex when a timer fires. Future-plan edits never shift an already-started party or re-ping it. Maybes and fillers retain their conditional labels in each window.
 
 ## HTTP and browser safety
 

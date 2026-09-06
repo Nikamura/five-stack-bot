@@ -137,87 +137,68 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
   });
 }
 
-/**
- * Evaluate the lock per §5.4.
- *
- * Walks the valid stacks largest-first:
- *  1. If any slot has yes >= currentStack, lock the EARLIEST such slot at
- *     currentStack with non-filler ✅ voters as core.
- *  2. Else if yes + maybe + fillerAvailable >= currentStack on any slot,
- *     lock the EARLIEST such slot, seating ✅ first, then 🤷 by vote-time,
- *     then 🛟 fillers. A later real ✅ vote will bump a maybe or filler back
- *     to alternate.
- *  3. Else fall through to the next-smallest stack and repeat.
- *
- * We do NOT wait for a bigger stack that's still mathematically possible —
- * the bot locks the largest stack achievable right now. If new ✅/🤷/🛟
- * votes later push a slot over a bigger stack, re-evaluation upgrades the
- * lock in place (diffLock → "changed" with the size bump).
- */
-export function evaluateLock(args: {
-  tallies: SlotTally[];
-  validStacks: number[]; // sorted largest-first
-}): LockResult {
-  const { tallies, validStacks } = args;
-  const stacks = [...validStacks].sort((a, b) => b - a);
-
-  for (const stack of stacks) {
-    // 1. Strict ✅ lock — earliest slot with non-filler yes >= stack.
-    const yesOnly = tallies.find((t) => t.yes >= stack);
-    if (yesOnly) {
-      const core = yesOnly.yesUserIds.slice(0, stack);
-      // Anyone else who said ✅, plus maybes and fillers, are alternates.
-      const alternates = [
-        ...yesOnly.yesUserIds.slice(stack),
-        ...yesOnly.maybeUserIds,
-        ...yesOnly.fillerAvailableUserIds,
-      ];
-      return { slot: yesOnly.slot, size: stack, core, alternates };
-    }
-    // 2. Soft lock — ✅ + 🤷 + 🛟 reaches the stack. ✅ seats first.
-    const withSoft = tallies.find(
-      (t) => t.yes + t.maybe + t.fillerAvailable >= stack,
-    );
-    if (withSoft) {
-      const ranked = [
-        ...withSoft.yesUserIds,
-        ...withSoft.maybeUserIds,
-        ...withSoft.fillerAvailableUserIds,
-      ];
-      return {
-        slot: withSoft.slot,
-        size: stack,
-        core: ranked.slice(0, stack),
-        alternates: ranked.slice(stack),
-      };
-    }
-    // Else: stack unreachable right now. Try the next-smallest.
+/** Choose the earliest playable start, then the largest enabled size there. */
+export function evaluateLock(args: { tallies: SlotTally[]; validStacks: number[] }): LockResult {
+  const stacks = [...args.validStacks].sort((a, b) => b - a);
+  for (const tally of [...args.tallies].sort((a, b) => a.slot - b.slot)) {
+    const ranked = [...tally.yesUserIds, ...tally.maybeUserIds, ...tally.fillerAvailableUserIds];
+    const size = stacks.find(size => ranked.length >= size);
+    if (size !== undefined) return { slot: tally.slot, size, core: ranked.slice(0, size), alternates: ranked.slice(size) };
   }
-
   return { slot: null, size: null, core: [], alternates: [] };
 }
 
-/**
- * The largest stack that's currently *reachable* at any slot, ignoring the
- * "wait for the largest possible" rule. Use this to surface a "we could play
- * X-stack at HH:MM right now if nobody more shows up" hint when the actual
- * lock evaluator is still waiting on a bigger stack. Includes filler help.
- *
- * Returns null if no slot has enough ✅ votes (even with filler help) to clear
- * the smallest valid stack.
+/** The same earliest playable start used by the actual lock. */
+export function tentativeLock(args: { tallies: SlotTally[]; validStacks: number[] }): { slot: number; size: number } | null {
+  const lock = evaluateLock(args);
+  return lock.slot === null ? null : { slot: lock.slot, size: lock.size! };
+}
+
+export interface PartyWindow {
+  slot: number;
+  /** Exclusive end of the candidate-start window, not a promised play-until time. */
+  endSlot: number;
+  size: number;
+  core: number[];
+  alternates: number[];
+  maybeIds: number[];
+  fillerIds: number[];
+}
+
+/** Independent parties: merge adjacent starts only when their playing lineup and conditions match.
+ * Past planned starts are history; future plans always use that slot's saved answers.
  */
-export function tentativeLock(args: {
-  tallies: SlotTally[];
-  validStacks: number[];
-}): { slot: number; size: number } | null {
-  const stacks = [...args.validStacks].sort((a, b) => b - a);
-  for (const stack of stacks) {
-    const earliest = args.tallies.find(
-      (t) => t.yes + t.maybe + t.fillerAvailable >= stack,
-    );
-    if (earliest) return { slot: earliest.slot, size: stack };
+export function buildPartyPlan(args: {
+  tallies: SlotTally[]; validStacks: number[]; firstFutureSlot?: number; previous?: PartyWindow[];
+}): PartyWindow[] {
+  const cutoff = args.firstFutureSlot ?? -Infinity;
+  const starts: PartyWindow[] = [];
+  for (const old of args.previous ?? []) {
+    for (let slot = old.slot; slot < Math.min(old.endSlot, cutoff); slot += 30) {
+      starts.push({ ...old, slot, endSlot: slot + 30 });
+    }
   }
-  return null;
+  for (const tally of args.tallies.filter(t => t.slot >= cutoff)) {
+    const lock = evaluateLock({ tallies: [tally], validStacks: args.validStacks });
+    if (lock.slot === null) continue;
+    starts.push({ ...lock, slot: lock.slot, endSlot: lock.slot + 30, size: lock.size!,
+      maybeIds: lock.core.filter(id => tally.maybeUserIds.includes(id)),
+      fillerIds: lock.core.filter(id => tally.fillerAvailableUserIds.includes(id)),
+    });
+  }
+  const plan: PartyWindow[] = [];
+  for (const entry of starts.sort((a, b) => a.slot - b.slot)) {
+    const last = plan.at(-1);
+    if (last && last.endSlot === entry.slot && partyLineupKey(last) === partyLineupKey(entry)) last.endSlot = entry.endSlot;
+    else plan.push({ ...entry });
+  }
+  return plan;
+}
+function partyLineupKey(party: PartyWindow): string {
+  return JSON.stringify([party.size, [...party.core].sort((a,b) => a-b), [...party.maybeIds].sort((a,b) => a-b), [...party.fillerIds].sort((a,b) => a-b)]);
+}
+export function partyPlanKey(plan: PartyWindow[]): string {
+  return JSON.stringify(plan.map(p => [p.slot, p.endSlot, partyLineupKey(p)]));
 }
 
 /**

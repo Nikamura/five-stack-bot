@@ -194,6 +194,17 @@ export function rebindSyntheticRosterMember(args: {
            AND session_id IN (SELECT id FROM sessions WHERE chat_id = ?)`,
         ).run(placeholder.telegram_user_id, args.chatId);
       }
+      // The plan is also identity-bearing state, including already-started history.
+      const plans = db.prepare(`SELECT p.session_id, p.plan_json, p.notified_json FROM session_party_plans p
+        JOIN sessions s ON s.id=p.session_id WHERE s.chat_id=?`).all(args.chatId) as { session_id: number; plan_json: string; notified_json: string }[];
+      const rebindPlan = (json: string) => JSON.stringify((JSON.parse(json) as import("../core/lock.js").PartyWindow[]).map(p => {
+        const mapIds = (ids: number[]) => [...new Set(ids.map(id => id === placeholder.telegram_user_id ? args.userId : id))];
+        const core = mapIds(p.core);
+        return { ...p, size: core.length, core, alternates: mapIds(p.alternates).filter(id => !core.includes(id)),
+          maybeIds: mapIds(p.maybeIds), fillerIds: mapIds(p.fillerIds) };
+      }));
+      for (const plan of plans) db.prepare("UPDATE session_party_plans SET plan_json=?,notified_json=? WHERE session_id=?")
+        .run(rebindPlan(plan.plan_json), rebindPlan(plan.notified_json), plan.session_id);
       db.prepare("DELETE FROM roster_members WHERE chat_id = ? AND telegram_user_id = ?")
         .run(args.chatId, placeholder.telegram_user_id);
     }
@@ -371,6 +382,7 @@ export function saveUserAvailability(args: {
   userId: number;
   votes: Array<{ slot: number; value: VoteValue }>;
   filler: boolean;
+  onSaved?: () => void;
 }): void {
   db.transaction(() => {
     const statement = db.prepare(
@@ -386,6 +398,7 @@ export function saveUserAvailability(args: {
       .run(args.sessionId, args.userId);
     if (args.filler) addFiller(args.sessionId, args.userId);
     else removeFiller(args.sessionId, args.userId);
+    args.onSaved?.();
   })();
 }
 
@@ -731,4 +744,30 @@ export function setRiotLinksBulk(chatId: number, actorId: number, links: { userI
     for (const row of links) setRiotLink(chatId, row.userId, row.link);
     audit(chatId, actorId, "/lfp_link_bulk", JSON.stringify(links));
   })();
+}
+
+
+export function getPartyPlan(sessionId: number): import("../core/lock.js").PartyWindow[] {
+  const row = db.prepare("SELECT plan_json FROM session_party_plans WHERE session_id=?").get(sessionId) as { plan_json: string } | undefined;
+  return row ? JSON.parse(row.plan_json) : [];
+}
+export function savePartyPlan(sessionId: number, plan: import("../core/lock.js").PartyWindow[]): void {
+  db.prepare("INSERT INTO session_party_plans(session_id,plan_json) VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET plan_json=excluded.plan_json").run(sessionId, JSON.stringify(plan));
+}
+export function partyReminderAttempted(sessionId: number, slot: number): boolean {
+  return !!db.prepare("SELECT 1 FROM party_reminder_attempts WHERE session_id=? AND slot_minutes=?").get(sessionId, slot);
+}
+export function claimPartyReminder(sessionId: number, slot: number): boolean {
+  return db.prepare("INSERT OR IGNORE INTO party_reminder_attempts(session_id,slot_minutes,attempted_at) VALUES (?,?,?)").run(sessionId, slot, nowMs()).changes > 0;
+}
+
+export function hasPartyPlan(sessionId: number): boolean {
+  return !!db.prepare("SELECT 1 FROM session_party_plans WHERE session_id=?").get(sessionId);
+}
+export function getNotifiedPartyPlan(sessionId: number): import("../core/lock.js").PartyWindow[] {
+  const row = db.prepare("SELECT notified_json FROM session_party_plans WHERE session_id=?").get(sessionId) as { notified_json: string } | undefined;
+  return row ? JSON.parse(row.notified_json) : [];
+}
+export function saveNotifiedPartyPlan(sessionId: number, plan: import("../core/lock.js").PartyWindow[]): void {
+  db.prepare("UPDATE session_party_plans SET notified_json=? WHERE session_id=?").run(JSON.stringify(plan), sessionId);
 }

@@ -3,6 +3,7 @@ import { log } from "../log.js";
 import {
   archiveSessionFromScheduler,
   fireT15,
+  firePartyT15,
 } from "../bot/session.js";
 
 const ARCHIVE = "archive";
@@ -25,6 +26,26 @@ export async function scheduleT15(sessionId: number, fireAt: number): Promise<vo
   arm(id, fireAt, async () => {
     await fireT15(sessionId);
   });
+}
+
+/** One persisted timer per independent party start; unchanged timers retain their IDs. */
+export function syncPartyTimers(sessionId: number, parties: { slot: number; fireAt: number }[]): void {
+  const wanted = new Map(parties.map(p => [p.slot, p.fireAt]));
+  for (const job of q.listJobs()) {
+    if (job.kind !== T15) continue;
+    const payload = JSON.parse(job.payload) as { sessionId?: number; slot?: number };
+    if (payload.sessionId !== sessionId) continue;
+    if (payload.slot !== undefined && wanted.get(payload.slot) === job.fire_at) {
+      wanted.delete(payload.slot);
+    } else {
+      clearTimer(job.id);
+      q.deleteJob(job.id);
+    }
+  }
+  for (const [slot, fireAt] of wanted) {
+    const id = q.scheduleJob(T15, { sessionId, slot }, fireAt);
+    arm(id, fireAt, () => firePartyT15(sessionId, slot));
+  }
 }
 
 export function cancelT15(sessionId: number): void {
@@ -85,7 +106,7 @@ export async function rehydrateJobs(graceMs: number = 5 * 60 * 1000): Promise<vo
       q.deleteJob(job.id);
       continue;
     }
-    let payload: { sessionId?: number };
+    let payload: { sessionId?: number; slot?: number };
     try {
       payload = JSON.parse(job.payload);
     } catch {
@@ -101,7 +122,7 @@ export async function rehydrateJobs(graceMs: number = 5 * 60 * 1000): Promise<vo
     if (job.kind === ARCHIVE) {
       arm(job.id, job.fire_at, () => archiveSessionFromScheduler(sid));
     } else if (job.kind === T15) {
-      arm(job.id, job.fire_at, () => fireT15(sid));
+      arm(job.id, job.fire_at, () => typeof payload.slot === "number" ? firePartyT15(sid, payload.slot) : fireT15(sid));
     } else {
       log.warn(`Unknown job kind '${job.kind}', dropping.`);
       q.deleteJob(job.id);

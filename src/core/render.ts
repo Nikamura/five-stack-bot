@@ -1,5 +1,5 @@
 import { InlineKeyboard } from "grammy";
-import type { LockResult, SlotTally } from "./lock.js";
+import type { LockResult, SlotTally, PartyWindow } from "./lock.js";
 import { compressSlotRanges, formatSlot } from "./slots.js";
 import type { RosterMember, SessionRow } from "../db/types.js";
 import {
@@ -29,6 +29,7 @@ export function renderSessionBody(args: {
   fillerIds: Set<number>;
   totalSlots: number;
   spectatorCount: number;
+  parties?: PartyWindow[];
 }): string {
   const {
     session,
@@ -58,6 +59,7 @@ export function renderSessionBody(args: {
   } else {
     lines.push("Waiting for enough overlapping availability.");
   }
+  if (args.parties?.length) lines.push(...renderPartyWindows(args.parties, roster));
   lines.push(`Saved replies: <b>${responded.size}/${roster.length}</b>`, "");
   lines.push(...voterSummary({ roster, tallies, skipIds, fillerIds, totalSlots }));
   const pending = roster.filter((m) => !responded.has(m.telegram_user_id));
@@ -187,6 +189,7 @@ export function renderGameOn(args: {
   unvotedIds?: number[];
   /** The next-larger enabled stack (e.g. 5 when locked at 4). */
   upgradeTarget?: number | null;
+  parties?: PartyWindow[];
 }): string {
   const map = new Map(args.roster.map((m) => [m.telegram_user_id, m]));
   const coreStr = mentionByIdsWithLate(
@@ -237,7 +240,21 @@ export function renderGameOn(args: {
       );
     }
   }
+  if (args.parties?.length) lines.push("", ...renderPartyWindows(args.parties, args.roster));
   return lines.join("\n");
+}
+
+/** Compact independent windows. Exact saved-start ranges avoid implying play duration. */
+export function renderPartyWindows(parties: PartyWindow[], roster: RosterMember[]): string[] {
+  const names = new Map(roster.map(m => [m.telegram_user_id, escapeHtml(m.display_name)]));
+  const lines = ["<b>Playable parties · start options</b>"];
+  for (const party of parties.slice(0, 4)) {
+    const range = startTimeRange(party.slot, party.endSlot);
+    const players = party.core.map(id => `${names.get(id) ?? "Player"}${party.fillerIds.includes(id) ? " (if needed)" : party.maybeIds.includes(id) ? " (maybe)" : ""}`).join(", ");
+    lines.push(`${range} · <b>${party.size}-stack</b> — ${players}`);
+  }
+  if (parties.length > 4) lines.push(`+${parties.length - 4} more parties in the availability app.`);
+  return lines;
 }
 
 export function renderGameOnKeyboard(sessionId: number): InlineKeyboard {

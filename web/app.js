@@ -297,6 +297,20 @@ function renderShared() {
       ? `Strongest start: ${formatTime(strongest.minutes)} · ${strongest.yes} in${strongest.maybe ? ` + ${strongest.maybe} maybe` : ''}${strongest.filler ? ` + ${strongest.filler} if needed` : ''}`
       : closed() ? 'No party formed for this session.' : 'Waiting for the first overlapping answers.';
   }
+  const windows = $('party-windows');
+  windows.replaceChildren();
+  windows.hidden = !snapshot.parties?.length;
+  if (snapshot.parties?.length) {
+    windows.append(el('h3', '', 'Playable parties'));
+    for (const party of snapshot.parties) {
+      const range = party.endSlot - 30 === party.slot ? formatTime(party.slot) : `${formatTime(party.slot)}–${formatTime(party.endSlot - 30)}`;
+      const players = party.core.map(id => `${playerNames([id])}${party.fillerIds.includes(id) ? ' (if needed)' : party.maybeIds.includes(id) ? ' (maybe)' : ''}`).join(', ');
+      const row = el('div', 'party-window');
+      row.append(el('strong', '', `${range} · ${party.size}-stack`), el('p', 'caption', players));
+      windows.append(row);
+    }
+    windows.append(el('p', 'caption', 'Each entry lists possible starts for that lineup. Later parties don’t delay earlier ones.'));
+  }
   if (state.selectedSlot === null) state.selectedSlot = snapshot.lock?.slot ?? strongest?.minutes ?? snapshot.slots[0]?.minutes;
   renderRail();
   const players = $('players');

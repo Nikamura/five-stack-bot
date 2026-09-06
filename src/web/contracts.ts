@@ -53,6 +53,7 @@ export interface SessionSnapshot {
     filler: boolean;
     votes: AvailabilityVote[];
   };
+  parties?: Array<{ slot: number; endSlot: number; size: number; core: number[]; maybeIds: number[]; fillerIds: number[] }>;
   lock: { slot: number; size: number; core: number[]; alternates: number[] } | null;
 }
 export class ApiError extends Error {

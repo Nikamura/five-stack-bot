@@ -11,7 +11,7 @@ Time selections in the Mini App take effect only after **Save**. Choosing one ti
 - Start a session with `/lfp` or a shortcut such as `/lfp 12-22`.
 - Put setting availability or dropping out first, using two taps for an initial range and individual time edits afterward.
 - Make everyone's saved times, live overlap and the current party the main view after answering; keep them available below the form while editing.
-- Lock the largest enabled party achievable now, defaulting to 5/3/2, and revise it after saved changes.
+- Start the earliest playable party, defaulting to enabled sizes 5/3/2, and list other playable windows independently.
 - Preserve existing announcements, reminders, roster tools and historical session data.
 
 ## 3. Non-goals
@@ -90,14 +90,11 @@ Telegram's MainButton mirrors Save. Back/close behavior preserves saved data, wi
 
 ### 5.4 Lock logic
 
-The bot evaluates **future** starts after complete saves and relevant roster/configuration changes. Enabled sizes are configurable via `/lfp_stacks`, default `{5, 3, 2}`. For each size, largest-first:
+The bot evaluates each **future** start after complete saves and relevant roster/configuration changes. Enabled sizes are configurable via `/lfp_stacks`, default `{5, 3, 2}`. Choose the earliest start where Yes + Maybe + filler can form an enabled party, selecting the largest enabled size at that start. Later larger or all-Yes parties never delay that earlier playable start.
 
-1. If any start has enough normal **Yes** players, choose the earliest such start.
-2. Otherwise, if **Yes + Maybe + filler availability** reaches that size, choose the earliest such start.
-3. Otherwise, try the next enabled smaller size. If none is achievable, there is no lock.
+One search contains multiple independent party windows. At every candidate start, seat the largest enabled party. Merge adjacent starts only if their playing lineup and Maybe/filler conditions match. A gap, changed lineup or changed size creates another window, even if both windows are 3-stacks. Thus 3 at 15:30, 4 at 16:30 and 5 at 17:30 are separate parties, not a series of postponements. Include fillers in a larger later party as authorized by their saved availability. Never assume an earlier participant remains available later; count only that later start’s saved answers.
 
-This prefers a later all-Yes start over an earlier soft start **at the same size**, and a larger soft party over a smaller all-Yes party. It does not wait for unanswered players before locking a smaller available party. For example, three Yes replies can form a trio immediately; two later replies can upgrade it to five.
-
+Window ranges show candidate starts with the actual last start included, consistent with the picker; they are not a promise that a game ends at that time. Persist the plan in the same transaction as an accepted availability save, before the Telegram debounce. Retain already-started slots as historical commitments while future slots recompute; a last-second accepted decline must update the plan before that start becomes history. Keep a separate last-notified plan so the debounced change announcement is not lost. Identity rebinding updates both stored plans. The earliest party stays in the existing lock record for backward-compatible first-party lateness and session stats. Before a party starts, loss of availability may still move or dissolve that party.
 Seats rank **Yes, then Maybe, then filler**, with earlier vote time first within each category. Everyone else available at the chosen start becomes an alternate in the same order. A new Yes may replace a Maybe or filler; a Maybe may replace a filler. Fillers can help achieve a larger enabled party but occupy seats after normal responses.
 
 Saved-answer writes preserve unchanged vote timestamps. Editing unrelated starts or retrying a Save must not reorder an existing Yes at the locked start. Missing votes are unanswered; the lock evaluator never infers No merely because a player voted at a different start. Explicit No is written by a complete Save or the group's direct Can't play submission, never by draft interaction.
@@ -108,7 +105,7 @@ The group message shows the proposed start window, enabled party sizes, roster, 
 
 Open panels receive current snapshots over authenticated SSE. The server checks about once per second and sends changes plus periodic keepalives. Player saves, roster changes, lateness flags, session closure and evaluated lock changes appear without reopening. Reconnect catches up from a complete snapshot. The UI shows Live, reconnecting/offline or ended state and does not replace a dirty draft when shared results change.
 
-“Strongest start” is a live suggestion ranked by total saved availability (Yes + Maybe + filler), then normal Yes count, then earliest time. The persisted lock is shown separately and follows §5.4, including enabled sizes and its strict-Yes priority.
+“Strongest start” is a live suggestion ranked by total saved availability (Yes + Maybe + filler), then normal Yes count, then earliest time. The persisted lock is shown separately and follows §5.4, including enabled sizes and earliest-playable priority. The full independent-party plan is shown alongside it.
 
 Saves return persisted availability before Telegram edits finish. Lock evaluation coalesces bursts over about 1.5 seconds; poll edits are debounced about 1.1 seconds. The party and group message can therefore follow the saved answer shortly afterward.
 
@@ -118,11 +115,11 @@ When a party locks, the bot:
 - Nudges newly seated Maybe players to open availability, change the locked start to Yes and Save.
 - Tags unanswered players when their answer could upgrade to the next enabled size.
 - Suggests a 3v3 custom when at least six roster members are available at the locked start, counting Yes, Maybe and fillers.
-- Schedules the T-15 reminder tagging core players. If a new lock is already inside that window, it reminds immediately; less than ten minutes before start uses “Load up” wording.
+- Schedules a T-15 reminder for each party window, naming its own players and conditions. A newly formed future party already inside that window is reminded immediately. Persist one attempt per session/start before sending, so retries and restarts cannot duplicate the reminder; an uncertain send may be omitted. Reconcile the current plan under the mutex before delivery and cancel removed-window timers. Retain unchanged timer IDs. Persist all future timers before sending any immediate reminders, and isolate a failed send to its own window. Never remind historical windows newly discovered after their start.
 
-GAME ON retains **I'll be 15 min late**. Only core players can toggle their own flag. It annotates GAME ON and reminders without moving the start or timer. Lateness clears when the party's time or core changes or the lock dissolves; alternates-only changes preserve it. At reminder time, if late players leave too few on-time players for any enabled party, a second message explains the delay.
+GAME ON retains **I'll be 15 min late** for the first party. Only its core players can toggle their own flag. It annotates GAME ON and reminders without moving the start or timer. Lateness clears when the party's time or core changes or the lock dissolves; alternates-only changes preserve it. At reminder time, if late players leave too few on-time players for any enabled party, a second message explains the delay.
 
-Time, size or core-lineup changes edit GAME ON and post a visible change follow-up. Alternates-only changes edit it silently. If no enabled party remains, GAME ON becomes **Party dissolved**, its T-15 reminder is cancelled, and the active session continues accepting availability.
+Before the first start, time, size or core-lineup changes edit GAME ON and post a visible change follow-up. Later-window changes update the full plan and post one compact plan update; they never describe earlier players as postponed or promoted to a later start. Alternates-only changes edit it silently. If no enabled party remains, GAME ON becomes **Party dissolved**, its T-15 reminder is cancelled, and the active session continues accepting availability.
 
 ### 5.6 Statistics and configuration
 
@@ -210,7 +207,9 @@ One Node.js 22+ process runs the grammY bot, the HTTP/SSE server and persisted-j
 | `sessions` | Session bounds, date anchors, message IDs and archive times |
 | `votes` | Explicit Yes/Maybe/No by player and candidate start, including vote priority timestamps |
 | `session_skips`, `session_fillers` | Session-only no-show and filler preferences |
-| `locks`, `lock_party`, `lock_late` | Current chosen party, alternates and lateness flags |
+| `locks`, `lock_party`, `lock_late` | First chosen party, alternates and first-party lateness flags |
+| `session_party_plans` | Persisted independent windows, including started history |
+| `party_reminder_attempts` | Durable per-window reminder send claims |
 | `scheduled_jobs` | Archive and T-15 timer metadata |
 | `audit_log`, `schema_migrations` | Command audit records and applied migration markers |
 

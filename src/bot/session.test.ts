@@ -17,12 +17,13 @@ const { getAvailabilitySnapshot, saveAvailability } = await import("./availabili
 await import("./callbacks.js");
 
 const now = Date.parse("2026-09-06T12:15:00Z");
+let clockNow = now;
 let sessionId = 0;
 let nextMessage = 100;
 const calls: Array<{ method: string; text?: string; options?: unknown }> = [];
 
 before(() => {
-  mock.method(Date, "now", () => now);
+  mock.method(Date, "now", () => clockNow);
   mock.timers.enable({ apis: ["setTimeout"] });
   bot.botInfo = { id: 123, is_bot: true, first_name: "Test", username: "TestBot",
     can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false,
@@ -55,6 +56,7 @@ before(() => {
 });
 
 beforeEach(() => {
+  clockNow = now;
   db.exec("DELETE FROM chats; DELETE FROM scheduled_jobs");
   calls.length = 0;
   q.getOrCreateChat(1);
@@ -223,4 +225,150 @@ describe("v2 session integration", () => {
     const clear = calls.find((call) => call.method === "editMessageReplyMarkup")!;
     assert.deepEqual((clear.options as { reply_markup: unknown }).reply_markup, { inline_keyboard: [] });
   });
+  it("keeps the early start, lists separate parties, and schedules each once across refreshes", async () => {
+    q.setChatStacks(1, [5,4,3]);
+    db.prepare("UPDATE sessions SET end_minutes=1080, archive_at=? WHERE id=?").run(Date.parse("2026-09-06T18:00:00Z"), sessionId);
+    q.setSessionPollMessage(sessionId, 50);
+    for (const id of [3,4,5]) q.addRosterMember(1, id, `player${id}`, `Player ${id}`);
+    for (const slot of [780,810,840,870,900,930]) for (const id of [1,2,3]) q.setVote(sessionId,id,slot,"yes");
+    await sessions.refreshActiveSession(1);
+    const firstReminder = q.listJobs().find(j => j.kind === "t15")!;
+    for (const slot of [840,870,900,930]) q.setVote(sessionId,4,slot,"yes");
+    for (const slot of [900,930]) q.setVote(sessionId,5,slot,"yes");
+    q.addFiller(sessionId,4);
+    calls.length = 0;
+    await sessions.refreshActiveSession(1);
+    assert.equal(q.getLock(sessionId)!.slot_minutes,780);
+    assert.equal(q.getLock(sessionId)!.size,3);
+    assert.deepEqual(q.getPartyPlan(sessionId).map(p => [p.slot,p.size]),[[780,3],[840,4],[900,5]]);
+    const edit = calls.find(c => c.method === "editMessageText")!.text!;
+    assert.match(edit,/13:00–13:30.*3-stack/);
+    assert.match(edit,/14:00–14:30.*4-stack/);
+    assert.match(edit,/15:00–15:30.*5-stack/);
+    assert.match(edit,/Player 4 \(if needed\)/);
+    assert.ok(!calls.some(c => c.text?.includes("13:00 →")));
+    const reminders = q.listJobs().filter(j => j.kind === "t15");
+    assert.equal(reminders.length,3);
+    assert.ok(reminders.some(j => j.id === firstReminder.id));
+    const snapshot = await getAvailabilitySnapshot(sessionId,{id:1,first_name:"One"});
+    assert.equal(snapshot.parties!.length,3);
+    clockNow = Date.parse("2026-09-06T12:45:00Z");
+    calls.length = 0;
+    await sessions.firePartyT15(sessionId,780);
+    assert.equal(calls.filter(c => c.method === "sendMessage").length,1);
+    await sessions.firePartyT15(sessionId,780);
+    assert.equal(calls.filter(c => c.method === "sendMessage").length,1);
+    clockNow = Date.parse("2026-09-06T13:15:00Z");
+    calls.length = 0;
+    await sessions.refreshAllActiveSessions();
+    assert.equal(q.getLock(sessionId)!.slot_minutes,780);
+    assert.equal(calls.filter(c => c.method === "sendMessage").length,0);
+    assert.equal(q.listJobs().filter(j => j.kind === "t15").length,2);
+    // Losing the fifth player removes only that later five-person party.
+    for (const slot of [900,930]) q.setVote(sessionId,5,slot,"no");
+    await sessions.refreshActiveSession(1);
+    assert.deepEqual(q.getPartyPlan(sessionId).map(p => [p.slot,p.size]),[[780,3],[840,4]]);
+    assert.equal(q.listJobs().filter(j => j.kind === "t15").length,1);
+    await sessions.cancelSession(sessionId);
+    calls.length=0;
+    clockNow = Date.parse("2026-09-06T13:45:00Z");
+    await sessions.firePartyT15(sessionId,840);
+    assert.equal(calls.filter(c => c.method === "sendMessage").length,0);
+  });
+
+  it("applies a last-second decline before the debounce can freeze the old party", async () => {
+    q.setChatStacks(1,[3]);
+    q.addRosterMember(1,3,"three","Three");
+    for (const id of [1,2,3]) q.setVote(sessionId,id,780,"yes");
+    await sessions.refreshActiveSession(1);
+    assert.equal(q.getPartyPlan(sessionId).length,1);
+    clockNow=Date.parse("2026-09-06T12:59:59Z");
+    const user={id:3,first_name:"Three",username:"three"};
+    const previous=await getAvailabilitySnapshot(sessionId,user);
+    await saveAvailability(sessionId,user,{expectedRevision:previous.me.revision,votes:[],unavailable:true,filler:false});
+    assert.deepEqual(q.getPartyPlan(sessionId),[]);
+    clockNow=Date.parse("2026-09-06T13:00:01Z");
+    await sessions.refreshActiveSession(1);
+    assert.deepEqual(q.getPartyPlan(sessionId),[]);
+    assert.equal(q.getLock(sessionId),null);
+    assert.equal(q.listJobs().filter(j=>j.kind==="t15").length,0);
+  });
+
+  it("keeps later timers when an immediate reminder fails", async t => {
+    q.setChatStacks(1,[3]);
+    q.addRosterMember(1,3,"three","Three");
+    for (const slot of [780,840]) for (const id of [1,2,3]) q.setVote(sessionId,id,slot,"yes");
+    clockNow=Date.parse("2026-09-06T12:50:00Z");
+    let failures=0;
+    t.mock.method(bot.api,"sendMessage",async (_chatId: unknown,text: string) => {
+      if (text.startsWith("⏰") || text.startsWith("🚀")) { failures++; throw new Error("Fixture Telegram outage"); }
+      return {message_id:nextMessage++};
+    });
+    await sessions.refreshActiveSession(1);
+    assert.equal(failures,1);
+    assert.equal(q.partyReminderAttempted(sessionId,780),true);
+    assert.deepEqual(q.listJobs().filter(j=>j.kind==="t15").map(j=>JSON.parse(j.payload).slot),[840]);
+    await sessions.refreshActiveSession(1);
+    assert.equal(failures,1);
+  });
+
+  it("rebinds placeholder identities in started and previously announced party windows", async () => {
+    q.setChatStacks(1,[3]);
+    q.addRosterMember(1,-33,"three","Three placeholder");
+    for (const id of [1,2,-33]) q.setVote(sessionId,id,780,"yes");
+    await sessions.refreshActiveSession(1);
+    clockNow=Date.parse("2026-09-06T13:01:00Z");
+    await getAvailabilitySnapshot(sessionId,{id:3,first_name:"Three",username:"three"});
+    await sessions.refreshActiveSession(1);
+    assert.deepEqual(q.getPartyPlan(sessionId)[0]!.core.toSorted((a,b)=>a-b),[1,2,3]);
+    assert.deepEqual(q.getNotifiedPartyPlan(sessionId)[0]!.core.toSorted((a,b)=>a-b),[1,2,3]);
+    assert.ok(q.getLockParty(sessionId).some(p=>p.telegram_user_id===3));
+    assert.ok(!q.getLockParty(sessionId).some(p=>p.telegram_user_id===-33));
+  });
+
+  it("keeps a failed later-plan announcement pending until a successful retry", async t => {
+    q.setChatStacks(1,[3,4]);
+    for (const id of [3,4]) q.addRosterMember(1,id,`player${id}`,`Player ${id}`);
+    for (const slot of [780,840]) for (const id of [1,2,3]) q.setVote(sessionId,id,slot,"yes");
+    await sessions.refreshActiveSession(1);
+    const notified=q.getNotifiedPartyPlan(sessionId);
+    q.setVote(sessionId,4,840,"yes");
+    let fail=true;
+    let notices=0;
+    t.mock.method(bot.api,"sendMessage",async (_chatId: unknown,text: string) => {
+      if (text.startsWith("📅")) {
+        if (fail) throw new Error("Plan update unavailable");
+        notices++;
+      }
+      return {message_id:nextMessage++};
+    });
+    await assert.rejects(sessions.refreshActiveSession(1),/Plan update unavailable/);
+    assert.deepEqual(q.getNotifiedPartyPlan(sessionId),notified);
+    assert.equal(q.getPartyPlan(sessionId)[1]!.size,4);
+    fail=false;
+    await sessions.refreshActiveSession(1);
+    assert.equal(notices,1);
+    assert.equal(q.getNotifiedPartyPlan(sessionId)[1]!.size,4);
+    await sessions.refreshActiveSession(1);
+    assert.equal(notices,1);
+  });
+
+  it("nudges later-party Maybes once and never restores historical first-party upgrade nudges", async () => {
+    q.setChatStacks(1,[3,4,5]);
+    for (const id of [3,4,5]) q.addRosterMember(1,id,`player${id}`,`Player ${id}`);
+    for (const slot of [780,840]) for (const id of [1,2,3]) q.setVote(sessionId,id,slot,"yes");
+    q.setVote(sessionId,4,840,"maybe");
+    await sessions.refreshActiveSession(1);
+    const prompts = () => calls.filter(c=>c.method==="sendMessage" && c.text?.startsWith("🤷"));
+    assert.equal(prompts().length,1);
+    assert.match(prompts()[0]!.text!,/@player4.*14:00 party/);
+    await sessions.refreshActiveSession(1);
+    assert.equal(prompts().length,1);
+    clockNow=Date.parse("2026-09-06T13:01:00Z");
+    calls.length=0;
+    await sessions.refreshGameOnMessage(sessionId);
+    const edit=calls.find(c=>c.method==="editMessageText")!.text!;
+    assert.doesNotMatch(edit,/@player5|save your availability for 13:00/);
+  });
+
 });
