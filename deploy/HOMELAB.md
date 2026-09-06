@@ -1,6 +1,41 @@
 # Mini App deployment on the homelab
 
-## Current release: independent parties and Riot linking
+## Current release: completed crew match results
+
+Deployed **2026-09-06 at 14:15:40 UTC** from application commit `a7a386b`.
+Tracker commit `6a716b8` was deployed first at 14:15:02 UTC to provide the
+shareable `/matches/:matchId` page. Its public API contract is unchanged.
+
+The bot now checks recorded matches every minute and posts results when three
+or more explicitly linked crew members finish on the same team. The initial
+watch boundary was established at startup, with no historical result posts.
+All seven linked accounts resolved through the production tracker API; one
+group had at least three links. Normal tracking/import latency still applies.
+
+- Bot image: `five-stack-bot:results-a7a386b`, also `latest`.
+- Tracker image: `lol-tracker:results-6a716b8`, also `latest`.
+- Rollback tags: `five-stack-bot:pre-results-20260906T141412Z` and
+  `lol-tracker:pre-results-20260906T141412Z`.
+- Private backup directory: `/opt/stacks/bots/backups/crew-results-20260906T141412Z`.
+  Contains consistent databases for both services, an additional bot database
+  snapshot immediately before cutover, Compose copies, source bundles, image
+  and container identities, and build logs. Keep these files private.
+
+Both releases passed builds and clean structured reviews before deployment;
+197 bot tests and the tracker API smoke checks passed. Live verification found
+HTTP 200 for a real standalone match page, its stats fragment, match API and
+tracker homepage; bot health was 200 and unauthenticated session access 401.
+The bot was online with zero restarts, SQLite quick_check was OK, and no
+pre-cutover vote values or timestamps changed. Only these two containers were
+recreated. No synthetic match or test Telegram result was sent; end-to-end
+result delivery awaits the next qualifying imported match.
+
+To roll back, retag the relevant recorded pre-results image as that service's
+`latest`, then recreate only that service with `docker compose up -d --no-deps`.
+Keep the current databases: the bot schema only adds watch/attempt tables.
+Prevent the source updater from rebuilding the newer release during rollback.
+
+## Previous release: independent parties and Riot linking
 
 Deployed **2026-09-06 at 12:00:21 UTC** from application commit `cd2cac3`,
 including stats/account-linking commit `2a85e99`. Production continues tracking
