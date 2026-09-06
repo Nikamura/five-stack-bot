@@ -1,6 +1,38 @@
 # Mini App deployment on the homelab
 
-## Current release: manual voting CTA
+## Current release: independent parties and Riot linking
+
+Deployed **2026-09-06 at 12:00:21 UTC** from application commit `cd2cac3`,
+including stats/account-linking commit `2a85e99`. Production continues tracking
+`origin/main`. One search now contains independently planned party windows;
+later larger groups do not delay an earlier playable party. Each window has a
+persisted reminder claim. `/lfp_link`, `/lfp_link_bulk`, and `/lfp_unlink` are live.
+Search encouragement uses explicitly linked accounts; no mappings were seeded
+by deployment.
+
+- Release image: `five-stack-bot:parties-cd2cac3` (also `latest`).
+- Image ID: `sha256:efa7017089ac928b11b25155964cc427310607f16020ceacc07a9105cce13eaa`.
+- Rollback image: `five-stack-bot:pre-parties-20260906T115943Z`.
+- Private backup: `/opt/stacks/bots/backups/five-stack-parties-20260906T115943Z`.
+  Includes consistent `database.before.db`, Compose/Caddy copies, source bundle,
+  previous container/image identities and build log. A second consistent copy
+  remains at `/app/data/pre-parties-cd2cac3.db` in the persistent volume.
+
+Verified 195 tests, typecheck, build and clean structured review before cutover.
+After cutover: HTTPS health 200; unauthenticated session API 401; served HTML,
+JS and CSS match the release; SQLite quick_check is OK; zero original votes or
+vote timestamps changed; active party plans and four future reminder jobs are
+persisted. Telegram polling is online with zero restarts. Only `five-stack-bot`
+was recreated; all unrelated containers stayed unchanged. Startup reconciled the
+active search and may send its normal party-plan notifications. No test Telegram
+messages or artificial availability submissions were sent.
+
+Rollback uses the recorded pre-parties image and retains the current database:
+this release adds plan, reminder-attempt, account-link and encouragement tables.
+Stop the source updater from rebuilding the newer release while investigating
+a rollback. Keep private backups on the host; do not commit their contents.
+
+## Previous release: manual voting CTA
 
 The Mini App and manual CTA were merged and pushed to `main`, then deployed on
 **2026-09-06 at 11:27:26 UTC** from application commit `42a0aed`. Production now
