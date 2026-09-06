@@ -149,4 +149,16 @@ CREATE TABLE IF NOT EXISTS audit_log (
   at                INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_chat ON audit_log(chat_id, at);
+
+CREATE TABLE IF NOT EXISTS match_result_watches (
+  chat_id INTEGER PRIMARY KEY REFERENCES chats(chat_id) ON DELETE CASCADE,
+  links_json TEXT NOT NULL,
+  enabled_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS match_result_attempts (
+  chat_id INTEGER NOT NULL REFERENCES chats(chat_id) ON DELETE CASCADE,
+  match_id TEXT NOT NULL,
+  attempted_at INTEGER NOT NULL,
+  PRIMARY KEY (chat_id, match_id)
+);
 `;

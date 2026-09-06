@@ -771,3 +771,20 @@ export function getNotifiedPartyPlan(sessionId: number): import("../core/lock.js
 export function saveNotifiedPartyPlan(sessionId: number, plan: import("../core/lock.js").PartyWindow[]): void {
   db.prepare("UPDATE session_party_plans SET notified_json=? WHERE session_id=?").run(JSON.stringify(plan), sessionId);
 }
+
+// -- Completed crew match notifications ---------------------------------------
+export function resultChatIds(): number[] {
+  return (db.prepare("SELECT chat_id FROM chats WHERE chat_id < 0").all() as { chat_id: number }[]).map(r => r.chat_id);
+}
+export function watchMatchResults(chatId: number, links: RiotLink[], now: number): number {
+  db.prepare(`INSERT INTO match_result_watches(chat_id,links_json,enabled_at) VALUES (?,?,?)
+    ON CONFLICT(chat_id) DO UPDATE SET links_json=excluded.links_json,enabled_at=excluded.enabled_at
+    WHERE links_json <> excluded.links_json`).run(chatId, JSON.stringify(links), now);
+  return (db.prepare("SELECT enabled_at FROM match_result_watches WHERE chat_id=?").get(chatId) as { enabled_at: number }).enabled_at;
+}
+export function matchResultAttempted(chatId: number, id: string): boolean {
+  return !!db.prepare("SELECT 1 FROM match_result_attempts WHERE chat_id=? AND match_id=?").get(chatId, id);
+}
+export function claimMatchResult(chatId: number, id: string, now: number): boolean {
+  return !!db.prepare("INSERT OR IGNORE INTO match_result_attempts(chat_id,match_id,attempted_at) VALUES (?,?,?)").run(chatId, id, now).changes;
+}

@@ -8,6 +8,7 @@ import { rehydrateJobs } from "./scheduler/jobs.js";
 import { refreshAllActiveSessions } from "./bot/session.js";
 import { getAvailabilitySnapshot, saveAvailability, remindNonVoters } from "./bot/availability.js";
 import { createMiniAppServer } from "./web/server.js";
+import { startMatchResults } from "./bot/matchResults.js";
 
 setLogLevel(config.logLevel);
 
@@ -59,12 +60,16 @@ async function main() {
     { command: "help", description: "Help" },
   ]);
 
+  const stopMatchResults = startMatchResults();
+
   process.once("SIGINT", () => {
+    stopMatchResults();
     log.info("SIGINT — stopping");
     bot.stop();
     server.close();
   });
   process.once("SIGTERM", () => {
+    stopMatchResults();
     log.info("SIGTERM — stopping");
     bot.stop();
     server.close();
