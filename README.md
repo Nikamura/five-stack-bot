@@ -33,7 +33,7 @@ npm run dev
 
 The **Set my availability** button uses a signed Telegram direct link such as `https://t.me/five_stack_bot?startapp=<signed-session-token>&mode=compact`. Telegram opens the configured HTTPS Main Mini App in a compact panel and signs the session parameter into its launch data. It is a normal URL button, which works in groups; the private-chat-only `web_app` inline button is not used. [Telegram Mini App launch documentation](https://core.telegram.org/bots/webapps#launching-the-main-mini-app)
 
-For the existing homelab deployment, use [deploy/HOMELAB.md](./deploy/HOMELAB.md). It covers the bots stack, its build checkout and separate Caddy network. The selected hostname is `five-stack-bot.cn.lt`; `@five_stack_bot` still needs its currently disabled Main Mini App enabled before the group launch flow can work.
+V2 was deployed to the homelab on **2026-09-06** at [five-stack-bot.cn.lt](https://five-stack-bot.cn.lt), with HTTPS and bot polling verified. At the deployment check, Telegram still reported `@five_stack_bot`'s Main Mini App disabled; BotFather activation and a real in-Telegram availability test remain pending. See [deploy/HOMELAB.md](./deploy/HOMELAB.md) for the deployed release, verification, backups and update/rollback runbook.
 
 ## Local preview and checks
 

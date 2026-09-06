@@ -1,10 +1,58 @@
-# Mini App activation on the homelab
+# Mini App deployment on the homelab
 
-These files are a prepared rollout, not a record of a completed deployment.
-Read-only inspection on 2026-09-06 confirmed the running bot is
-`@five_stack_bot`, and its Main Mini App is not configured yet.
+V2 was deployed on **2026-09-06 at 10:57:48 UTC**. The HTTPS application and
+`@five_stack_bot` polling are running. At the deployment check, Telegram
+`getMe` still reported `has_main_web_app: false`; Karolis is completing
+BotFather setup. Native Mini App launch and real availability submissions
+have not yet been verified.
 
-## Existing installation
+## Deployed release
+
+| Item | Verified value |
+|---|---|
+| Application commit | `1232967` |
+| Production source branch | `codex/mini-app-v2`, pushed to origin and tracked by the production checkout |
+| Release image | `five-stack-bot:v2-1232967`, also tagged `five-stack-bot:latest` |
+| Image ID | `sha256:f67f5aaa6f4c5d5adb448931dd2ebf9e0b207202d62a027051237be7f036f5d5` |
+| Rollback image | `five-stack-bot:pre-v2-20260906t105549z` |
+| Backup directory | `/opt/stacks/bots/backups/five-stack-v2-20260906T105549Z` |
+
+The permanent Compose file now includes `MINI_APP_URL=https://five-stack-bot.cn.lt`,
+empty `MINI_APP_SHORT_NAME`, `WEB_HOST=0.0.0.0`, and `WEB_PORT=3000`. The bot joins
+`bots_default` and external `caddy_default`, with no published host port. The
+source, Compose and data locations below were retained. The existing Git-pull
+updater follows the checkout's tracked `codex/mini-app-v2` branch; account for
+that branch explicitly before changing the deployment source.
+
+The standalone [Caddy site](Caddyfile.miniapp) was appended to the existing
+Caddyfile, validated with the complete configuration, and reloaded. The
+bind-mounted file was written in place so the running Caddy container retained
+its mount. Only the bot was recreated; all 40 unrelated containers, including
+Caddy, stayed unchanged. Existing routes and authorization policies were kept.
+
+## Verification and remaining activation
+
+- The bot was running with zero restarts and Telegram polling online.
+- Verified HTTPS `/healthz` returned HTTP 200 with `{"ok":true}`. Unauthenticated
+  session reads, live-stream requests and availability submissions returned
+  HTTP 401 with `Cache-Control: no-store`. TLS verification remained enabled.
+- Public HTML, `app.js`, `model.js` and `styles.css` matched the release bytes.
+- SQLite `quick_check` passed. Every original vote row retained its values and
+  timestamps; the one-time migration added explicit No rows for former implied
+  declines. No private roster or session data is recorded here.
+- Before deployment, all 161 tests, typecheck, build and structured review passed.
+
+Complete BotFather Main Mini App setup and perform the Telegram checks under
+**Activate and verify** below. These public endpoint checks do not establish that
+a native Telegram launch, authenticated live stream or real vote has succeeded.
+
+The backup directory is mode 0700. Its `database.before.db` is a consistent
+SQLite backup with mode 0600; another copy remains in the data volume at
+`/app/data/pre-v2-20260906T105549Z.db`. The directory also contains configuration
+backups, a source Git bundle, a release manifest and build/validation logs.
+Keep backup contents on the host; configuration backups can contain credentials.
+
+## Production installation
 
 | Component | Location |
 |---|---|
@@ -20,7 +68,7 @@ Read-only inspection on 2026-09-06 confirmed the running bot is
 Use the existing bot token and data volume. Run exactly one polling bot process.
 The Mini App HTTP server runs in that same process on port 3000.
 
-## Prepare the cutover
+## Prepare a future cutover
 
 1. Put the reviewed v2 source in the existing build context. Build the new
    image without restarting the service. Record the old image ID and tag it
@@ -74,8 +122,8 @@ The Mini App HTTP server runs in that same process on port 3000.
 
 ## Activate and verify
 
-After the hostname, Caddy route and BotFather setting are ready, recreate only
-the bot service with the built v2 image:
+For a future release, after building its image and checking configuration,
+recreate only the bot service from `/opt/stacks/bots` and verify HTTPS:
 
 ```sh
 docker compose up -d --no-deps five-stack-bot
@@ -84,9 +132,10 @@ curl -s -o /dev/null -w '%{http_code}\n' https://five-stack-bot.cn.lt/api/sessio
 ```
 
 Expect `{"ok":true}` and HTTP **401** for the unauthenticated session request.
-The first v2 boot applies the transactional migration and refreshes still-active
-posted messages with the picker button. Existing choices, including previous
-opener votes and inferred declines, retain their meaning. Expired sessions close.
+The first v2 boot already applied the transactional migration. Subsequent boots
+retain it and refresh any active posted messages with the current controls.
+Existing choices, including previous opener votes and inferred declines, retain
+their meaning. Expired sessions close.
 
 In Telegram, verify with a test group or an explicitly approved real session:
 
@@ -108,8 +157,13 @@ or tokens in logs, screenshots, URLs, review notes or shell history.
 
 ## Rollback
 
-Restore the old image tag in the service and the backed-up Compose/Caddy
-configuration, then recreate only this bot. The v2 migration only adds a
+For this cutover, restore `five-stack-bot:pre-v2-20260906t105549z` in the service
+and use the configuration backups in the recorded backup directory, then
+recreate only this bot. Restore the production source checkout to its previous
+`main` branch at `bd4fabbd3bf5f0bdac735827e83abd1eb4a27b6b` before the next
+Git-pull/build updater run, so maintenance cannot rebuild v2 after rollback.
+Restore the Caddyfile in place and validate/reload it, retaining its mounted
+inode. The v2 migration only adds a
 migration marker and materializes old implicit declines into existing vote
 rows, so the v1 code can read the migrated database. Prefer keeping current
 data to avoid losing answers saved after the cutover. If restoring the backup

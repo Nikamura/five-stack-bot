@@ -146,7 +146,7 @@ Existing votes are retained. A transactional, one-time migration materializes th
 
 Startup refreshes active group and GAME ON messages. Old slot, all-Yes and filler callback buttons only upgrade their keyboard to the new controls; tapping them cannot cast a partial vote. The old Can't play callback remains a complete decline action, with the same checks as the new group button. Bumped messages keep referring to the original session.
 
-Production needs a reachable HTTPS origin and a configured Telegram Main Mini App. The intended URL is `https://five-stack-bot.cn.lt` for `@five_stack_bot`. **Set my availability** uses a signed `t.me` direct URL with `startapp` and `mode=compact`; BotFather maps the bot's Main Mini App to the HTTPS URL. The group's direct Can't play action does not depend on Mini App setup. Deployment details and launch checks live in [deploy/HOMELAB.md](./deploy/HOMELAB.md).
+The production HTTPS origin is `https://five-stack-bot.cn.lt` for `@five_stack_bot`. **Set my availability** uses a signed `t.me` direct URL with `startapp` and `mode=compact`; BotFather must map the bot's Main Mini App to that HTTPS URL. The group's direct Can't play action does not depend on Mini App setup. Deployment status, verification and remaining native launch checks live in [deploy/HOMELAB.md](./deploy/HOMELAB.md).
 
 The local demo is isolated: it requires no token or database, uses sample players, and cannot write live availability. The live backend never accepts demo mode as authentication.
 
