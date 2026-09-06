@@ -690,3 +690,45 @@ export function statsMostCommonStack(
   all.sort((a, b) => b.n - a.n);
   return all[0] && all[0].n > 0 ? all[0] : null;
 }
+
+// -- Explicit self-links and at-most-once search encouragement -----------------
+export interface RiotLink {
+  origin: string; puuid: string; gameName: string; tagLine: string; platform: string;
+}
+export function setRiotLink(chatId: number, userId: number, link: RiotLink): void {
+  db.prepare(`INSERT INTO riot_links (chat_id, telegram_user_id, origin, puuid, gameName, tagLine, platform)
+    VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(chat_id, telegram_user_id) DO UPDATE SET
+    origin=excluded.origin, puuid=excluded.puuid, gameName=excluded.gameName,
+    tagLine=excluded.tagLine, platform=excluded.platform`).run(chatId, userId, link.origin, link.puuid, link.gameName, link.tagLine, link.platform);
+}
+export function deleteRiotLink(chatId: number, userId: number): void {
+  db.prepare("DELETE FROM riot_links WHERE chat_id=? AND telegram_user_id=?").run(chatId, userId);
+}
+export function getRiotLinks(chatId: number): RiotLink[] {
+  return db.prepare("SELECT origin, puuid, gameName, tagLine, platform FROM riot_links WHERE chat_id=? ORDER BY telegram_user_id").all(chatId) as RiotLink[];
+}
+export function encouragementHistory(chatId: number): import("../core/encouragement.js").UsedEncouragement[] {
+  return db.prepare("SELECT at, category, fact, phrase, text FROM encouragements WHERE chat_id=? AND text != '' ORDER BY at DESC, session_id DESC").all(chatId) as import("../core/encouragement.js").UsedEncouragement[];
+}
+export function claimEncouragement(sessionId: number, chatId: number, at: number): boolean {
+  return db.transaction(() => {
+    const prior = db.prepare("SELECT 1 FROM encouragements WHERE chat_id=? AND at>? LIMIT 1").get(chatId, at - 6 * 3600000);
+    const r = db.prepare("INSERT OR IGNORE INTO encouragements(session_id, chat_id, at) VALUES (?, ?, ?)").run(sessionId, chatId, at);
+    return r.changes > 0 && !prior;
+  })();
+}
+export function saveEncouragement(sessionId: number, value: import("../core/encouragement.js").Encouragement): void {
+  db.prepare("UPDATE encouragements SET category=?, fact=?, phrase=?, text=? WHERE session_id=?").run(value.category, value.fact, value.phrase, value.text, sessionId);
+}
+
+/** Replace only the named targets atomically, including swaps and the audit record. */
+export function setRiotLinksBulk(chatId: number, actorId: number, links: { userId: number; link: RiotLink }[]): void {
+  db.transaction(() => {
+    if (!getRosterMember(chatId, actorId) || links.some(row => !getRosterMember(chatId, row.userId))) {
+      throw new Error("Roster changed. Check that you and every target are still in this chat’s roster.");
+    }
+    for (const row of links) deleteRiotLink(chatId, row.userId);
+    for (const row of links) setRiotLink(chatId, row.userId, row.link);
+    audit(chatId, actorId, "/lfp_link_bulk", JSON.stringify(links));
+  })();
+}

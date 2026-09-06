@@ -1,3 +1,4 @@
+import { postSearchEncouragement } from "./encouragement.js";
 import { GrammyError } from "grammy";
 import { bot } from "./instance.js";
 import { withMutex } from "./mutex.js";
@@ -99,6 +100,8 @@ export async function openSession(args: {
 
   // Schedule auto-archive.
   await scheduleArchive(sessionId, archiveAt);
+
+  void postSearchEncouragement(sessionId).catch(err => log.warn("encouragement skipped", err));
 
   return sessionId;
 }

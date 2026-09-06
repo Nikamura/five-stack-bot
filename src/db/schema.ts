@@ -105,6 +105,29 @@ CREATE TABLE IF NOT EXISTS scheduled_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_fire_at ON scheduled_jobs(fire_at);
 
+CREATE TABLE IF NOT EXISTS riot_links (
+  chat_id INTEGER NOT NULL,
+  telegram_user_id INTEGER NOT NULL,
+  origin TEXT NOT NULL,
+  puuid TEXT NOT NULL,
+  gameName TEXT NOT NULL,
+  tagLine TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  PRIMARY KEY (chat_id, telegram_user_id),
+  UNIQUE (chat_id, origin, puuid),
+  FOREIGN KEY (chat_id, telegram_user_id) REFERENCES roster_members(chat_id, telegram_user_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS encouragements (
+  session_id INTEGER PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  chat_id INTEGER NOT NULL REFERENCES chats(chat_id) ON DELETE CASCADE,
+  at INTEGER NOT NULL,
+  category TEXT NOT NULL DEFAULT '',
+  fact TEXT NOT NULL DEFAULT '',
+  phrase INTEGER NOT NULL DEFAULT 0,
+  text TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_encouragement_chat ON encouragements(chat_id, at);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   chat_id           INTEGER NOT NULL,

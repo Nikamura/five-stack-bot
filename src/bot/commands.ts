@@ -1,3 +1,6 @@
+import { linkAccountsBulk } from "./accountLinkBulk.js";
+import { parseAccountLink } from "../core/accountLink.js";
+import { resolveAccount } from "./tracker.js";
 import type { Context } from "grammy";
 import { InlineKeyboard } from "grammy";
 import type { MessageEntity } from "grammy/types";
@@ -33,6 +36,49 @@ import {
 import { setPending, takePending } from "./wizardState.js";
 import { isValidIanaZone } from "../core/time.js";
 import { escapeHtml } from "../core/mention.js";
+
+bot.command("lfp_link_bulk", async ctx => {
+  if (!isGroup(ctx) || !ctx.from || !ctx.chat) return;
+  let reply: string;
+  try {
+    reply = await linkAccountsBulk(ctx.chat.id, ctx.from.id, commandTail(ctx.message?.text));
+  } catch (error) {
+    reply = `${error instanceof Error ? error.message : "Couldn’t process the batch."}\nNo mappings were changed.`;
+  }
+  await ctx.reply(reply);
+});
+
+bot.command("lfp_link", async ctx => {
+  if (!isGroup(ctx) || !ctx.from || !ctx.chat) return;
+  if (!q.getRosterMember(ctx.chat.id, ctx.from.id)) {
+    await ctx.reply("Vote in a party search to bind your roster entry first, or ask a friend to reply to your message with /lfp_add. Then link your account.");
+    return;
+  }
+  const parsed = parseAccountLink(commandTail(ctx.message?.text), ctx.from.id);
+  if (!parsed) { await ctx.reply("Use /lfp_link [Telegram ID] Game Name#TAG euw1. Omit the Telegram ID to link yourself."); return; }
+  const member = q.getRosterMember(ctx.chat.id, parsed.userId);
+  if (!member) { await ctx.reply("That Telegram ID isn’t in this chat’s roster. Add the player by replying to their message with /lfp_add first."); return; }
+  try {
+    const link = await resolveAccount(parsed.gameName, parsed.tagLine, parsed.platform);
+    q.setRiotLink(ctx.chat.id, parsed.userId, link);
+    q.audit(ctx.chat.id, ctx.from.id, "/lfp_link", `${parsed.userId} ${link.gameName}#${link.tagLine} ${link.platform}`);
+    await ctx.reply(`Linked ${member.display_name} (${parsed.userId}): ${link.gameName}#${link.tagLine} (${link.platform}).`);
+  } catch { await ctx.reply("Couldn’t link that account. Check the full Riot ID and platform in the tracker; it may be unavailable or already linked in this chat. Try /lfp_link again to explicitly relink a changed account."); }
+});
+bot.command("lfp_unlink", async ctx => {
+  if (!isGroup(ctx) || !ctx.from || !ctx.chat) return;
+  if (!q.getRosterMember(ctx.chat.id, ctx.from.id)) { await ctx.reply("Join this chat’s roster before managing account links."); return; }
+  const arg = commandTail(ctx.message?.text);
+  const userId = arg ? Number(arg) : ctx.from.id;
+  if ((arg && !/^\d+$/.test(arg)) || !Number.isSafeInteger(userId) || userId <= 0) {
+    await ctx.reply("Use /lfp_unlink [Telegram ID]. Omit the ID to unlink yourself."); return;
+  }
+  const member = q.getRosterMember(ctx.chat.id, userId);
+  if (!member) { await ctx.reply("That Telegram ID isn’t in this chat’s roster."); return; }
+  q.deleteRiotLink(ctx.chat.id, userId);
+  q.audit(ctx.chat.id, ctx.from.id, "/lfp_unlink", String(userId));
+  await ctx.reply(`Removed the Riot account link for ${member.display_name} (${userId}) in this chat.`);
+});
 
 interface AddedMember {
   telegram_user_id: number;

@@ -52,6 +52,9 @@ async function main() {
     { command: "lfp_skip", description: "Mark a roster member as no-show for tonight" },
     { command: "lfp_tz", description: "Set the chat timezone" },
     { command: "lfp_stacks", description: "Toggle valid party sizes" },
+    { command: "lfp_link", description: "Link a roster member: [Telegram ID] Name#TAG platform" },
+    { command: "lfp_link_bulk", description: "Link multiple roster members, one mapping per line" },
+    { command: "lfp_unlink", description: "Remove a Riot account link: [Telegram ID]" },
     { command: "lfp_stats", description: "Show chat stats" },
     { command: "help", description: "Help" },
   ]);

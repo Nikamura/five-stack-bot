@@ -130,3 +130,45 @@ Voting reminders are sent only when someone presses the button, with a shared
 Each fresh reminder removes the previous CTA. It disappears when everyone
 has responded, the largest enabled party fills, or the session ends.
 The message ID and cooldown survive restarts.
+
+### Optional search encouragement
+
+You can manually map any roster member in the group with
+`/lfp_link TelegramID Game Name#TAG euw1`. Omit TelegramID to link yourself.
+`/lfp_unlink [TelegramID]` removes the mapping. Both sender and target must be
+in the chat’s roster; changes record the actor and target in the audit log.
+At least two linked friends are needed for shared match facts. If your roster
+entry is still a username placeholder, vote once in a search first, or have a
+friend reply to your message with `/lfp_add` to bind your Telegram ID.
+
+New searches can receive one short reply about recorded shared flex results,
+or a varied invitation. A six-hour cooldown and persistent fact history keep
+repeat searches quiet. Tracker work runs in the background with a 2.5-second
+deadline; no API credentials or extra configuration are needed. Capped, stale,
+missing or failed data produces no statistics. See PRD §5.6.1 for exact bounds.
+
+Example consecutive daily searches (fixtures, **not real group results**):
+
+| Search | New evidence | Extra line alongside “Friend is looking for a party tonight!” |
+|---|---|---|
+| Sunday | Three shared flex wins today | Linked friends’ shared flex today: 3–0 recorded. Who’s up for another? 🎮 |
+| Monday | Three new shared flex wins; latest recorded games are wins | Linked friends won the last 6 recorded shared flex games. Keep it cooking 🔥 |
+| Tuesday | Three new shared flex wins today | Linked friends’ shared flex today: 3–0 recorded. Let’s get a party going 👀 |
+| Wednesday | No fresh meaningful evidence | Who’s up for some games tonight? 🎮 |
+| Thursday | Three shared flex losses today | Linked friends’ shared flex today: 0–3 recorded. Who’s up for another? 🎮 |
+
+The sequence uses accumulating fixture history: Monday adds three wins to
+Sunday’s three, and Wednesday adds no games. A bump or retry adds no extra line. An unchanged result is not reused under a different
+phrase or day label. Weekday comparisons and reunion claims are deferred.
+
+
+For a single-message import, send `/lfp_link_bulk` followed by one explicit
+`TelegramID Game Name#TAG platform` mapping per line (up to 10). The bot validates
+all accounts before saving; any error leaves the entire batch unchanged.
+Repeating the same batch keeps the same mappings. Example:
+
+```text
+/lfp_link_bulk
+5340273861 Wazalsky#EUW euw1
+1388135549 Nikamura#EUW euw1
+```
