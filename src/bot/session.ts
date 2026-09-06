@@ -6,7 +6,6 @@ import type { LockResult, SlotTally } from "../core/lock.js";
 import {
   diffLock,
   evaluateLock,
-  nextVote,
   tallySlots,
   unvotedRosterMembers,
 } from "../core/lock.js";
@@ -28,6 +27,18 @@ import { computeArchiveAt, slotInstantMs } from "../core/time.js";
 import { log } from "../log.js";
 import { scheduleArchive, scheduleT15, cancelT15 } from "../scheduler/jobs.js";
 import type { RosterMember, SessionRow } from "../db/types.js";
+import { config } from "../config.js";
+import { createMiniAppLink } from "../web/auth.js";
+
+export function getSessionMiniAppLink(sessionId: number): string | null {
+  if (!config.miniAppUrl) return null;
+  return createMiniAppLink({
+    botUsername: bot.botInfo.username,
+    sessionId,
+    botToken: config.botToken,
+    shortName: config.miniAppShortName,
+  });
+}
 
 /**
  * Open a new session in `chatId`. Sends the session message, persists everything,
@@ -47,8 +58,7 @@ export async function openSession(args: {
   if (existing) return { existingId: existing.id };
 
   // Auto-add the opener to the roster. Common case: the person who runs
-  // /lfp is one of the players. If they aren't actually playing tonight,
-  // a single ❌ vote (or /lfp_remove) takes them out of the calculus.
+  // /lfp is one of the players. They still need to submit availability.
   q.addRosterMember(
     args.chatId,
     args.openerUserId,
@@ -72,13 +82,8 @@ export async function openSession(args: {
     archiveAt,
   });
 
-  // Pre-vote the opener as ✅ on every slot. They opened the session, so the
-  // assumption is that they're available — if not, they tap the slots they
-  // can't make.
-  const slots = buildSlots(args.startMinutes, args.endMinutes);
-  for (const slot of slots) {
-    q.setVote(sessionId, args.openerUserId, slot, "yes");
-  }
+  // Opening a session proposes the window. The organizer submits their own
+  // availability through the same explicit Save flow as everyone else.
 
   // Render and send the session message.
   const session = q.getSession(sessionId)!;
@@ -111,7 +116,7 @@ function schedulePollEdit(sessionId: number): void {
   if (existing) clearTimeout(existing);
   const t = setTimeout(() => {
     pendingEditTimers.delete(sessionId);
-    void flushPollEdit(sessionId);
+    void flushPollEdit(sessionId).catch((error) => log.warn("Poll refresh failed", error));
   }, EDIT_DEBOUNCE_MS);
   t.unref?.();
   pendingEditTimers.set(sessionId, t);
@@ -126,10 +131,8 @@ function cancelPendingPollEdit(sessionId: number): void {
 }
 
 // ----------------------------------------------------------------------------
-// Debounced lock evaluation. Without this, every vote tap that flips lock
-// state immediately posts `GAME ON` / `Party dissolved` / maybe-nudge messages
-// — a player toggling their maybes back and forth fires N rounds of those
-// messages in seconds. Debouncing collapses a burst into one final outcome.
+// Debounced lock evaluation. Several players can submit or decline together;
+// coalesce their committed answers into one party decision and notification.
 // ----------------------------------------------------------------------------
 
 const EVAL_DEBOUNCE_MS = 1500;
@@ -140,10 +143,15 @@ function scheduleEvaluation(sessionId: number): void {
   if (existing) clearTimeout(existing);
   const t = setTimeout(() => {
     pendingEvalTimers.delete(sessionId);
-    void flushEvaluation(sessionId);
+    void flushEvaluation(sessionId).catch((error) => log.warn("Party evaluation failed", error));
   }, EVAL_DEBOUNCE_MS);
   t.unref?.();
   pendingEvalTimers.set(sessionId, t);
+}
+
+/** Called once after an atomic Mini App save; notifications stay off the HTTP path. */
+export function queueSessionEvaluation(sessionId: number): void {
+  scheduleEvaluation(sessionId);
 }
 
 function cancelPendingEvaluation(sessionId: number): void {
@@ -157,7 +165,7 @@ function cancelPendingEvaluation(sessionId: number): void {
 async function flushEvaluation(sessionId: number): Promise<void> {
   await withMutex(`session:${sessionId}`, async () => {
     const session = q.getSession(sessionId);
-    if (!session || session.archived_at !== null) return;
+    if (!session || session.archived_at !== null || session.archive_at <= Date.now()) return;
     await evaluateAndApply(session);
   });
 }
@@ -202,106 +210,6 @@ async function tryUnpin(chatId: number, messageId: number): Promise<void> {
   }
 }
 
-/**
- * Apply a vote, then re-evaluate. The voter is identified by `userId`.
- * Tapping cycles: yes → maybe → no → cleared → yes.
- * Non-roster votes are accepted (they show up in the spectators line) but
- * never affect the lock.
- */
-export async function recordVote(args: {
-  sessionId: number;
-  userId: number;
-  username: string | null;
-  displayName: string;
-  slot: number;
-}): Promise<{ newValue: "yes" | "maybe" | "no"; isRoster: boolean }> {
-  return withMutex(`session:${args.sessionId}`, async () => {
-    const session = q.getSession(args.sessionId);
-    if (!session || session.archived_at !== null) {
-      throw new SessionGone();
-    }
-    const current = q.getVote(args.sessionId, args.userId, args.slot);
-    const next = nextVote(current?.value ?? null);
-    q.setVote(args.sessionId, args.userId, args.slot, next);
-    const rosterIds = q.getRosterIds(session.chat_id);
-    const isRoster = rosterIds.has(args.userId);
-    scheduleEvaluation(args.sessionId);
-    return { newValue: next, isRoster };
-  });
-}
-
-/**
- * Combo vote: toggle a pair of adjacent 30-min slots in the same hour as a
- * single unit. Cycles ✅ → 🤷 → ❌ → ✅ off the *earlier* slot's current
- * value, then applies that next value to both slots so they always end up
- * in sync after a combo tap.
- */
-export async function recordComboVote(args: {
-  sessionId: number;
-  userId: number;
-  username: string | null;
-  displayName: string;
-  slot: number;
-}): Promise<{ newValue: "yes" | "maybe" | "no"; isRoster: boolean }> {
-  return withMutex(`session:${args.sessionId}`, async () => {
-    const session = q.getSession(args.sessionId);
-    if (!session || session.archived_at !== null) {
-      throw new SessionGone();
-    }
-    const current = q.getVote(args.sessionId, args.userId, args.slot);
-    const next = nextVote(current?.value ?? null);
-    q.setVote(args.sessionId, args.userId, args.slot, next);
-    q.setVote(args.sessionId, args.userId, args.slot + 30, next);
-    const rosterIds = q.getRosterIds(session.chat_id);
-    const isRoster = rosterIds.has(args.userId);
-    scheduleEvaluation(args.sessionId);
-    return { newValue: next, isRoster };
-  });
-}
-
-export async function bulkNoTonight(args: {
-  sessionId: number;
-  userId: number;
-}): Promise<void> {
-  await withMutex(`session:${args.sessionId}`, async () => {
-    const session = q.getSession(args.sessionId);
-    if (!session || session.archived_at !== null) throw new SessionGone();
-    const slots = buildSlots(session.start_minutes, session.end_minutes);
-    q.bulkNoForUser(args.sessionId, args.userId, slots);
-    scheduleEvaluation(args.sessionId);
-  });
-}
-
-/**
- * Toggle "all times work" for a user. If every slot is already ✅, clears
- * the user's votes back to neutral; otherwise sets every slot to ✅.
- * Returns the resulting state for the optimistic toast.
- */
-export async function bulkYesToggleTonight(args: {
-  sessionId: number;
-  userId: number;
-}): Promise<"yes-all" | "cleared"> {
-  return withMutex(`session:${args.sessionId}`, async () => {
-    const session = q.getSession(args.sessionId);
-    if (!session || session.archived_at !== null) throw new SessionGone();
-    const slots = buildSlots(session.start_minutes, session.end_minutes);
-    const existing = q.getUserVotes(args.sessionId, args.userId);
-    const allYes =
-      existing.length === slots.length &&
-      existing.every((v) => v.value === "yes");
-    let result: "yes-all" | "cleared";
-    if (allYes) {
-      q.clearVotesForUser(args.sessionId, args.userId);
-      result = "cleared";
-    } else {
-      q.bulkYesForUser(args.sessionId, args.userId, slots);
-      result = "yes-all";
-    }
-    scheduleEvaluation(args.sessionId);
-    return result;
-  });
-}
-
 export async function markSkip(args: {
   sessionId: number;
   userId: number;
@@ -315,34 +223,6 @@ export async function markSkip(args: {
 }
 
 /**
- * Toggle "I can fill if needed" for `userId` on this session. Returns the
- * resulting state so the callback can show an accurate toast.
- *
- * Filler users' ✅/🤷 votes are pooled into `fillerAvailable` — they only
- * fill the stack when non-filler ✅ alone falls short, and they get bumped
- * back to alternate the moment a real ✅ would replace them.
- */
-export async function toggleFiller(args: {
-  sessionId: number;
-  userId: number;
-}): Promise<"on" | "off"> {
-  return withMutex(`session:${args.sessionId}`, async () => {
-    const session = q.getSession(args.sessionId);
-    if (!session || session.archived_at !== null) throw new SessionGone();
-    let next: "on" | "off";
-    if (q.isFiller(args.sessionId, args.userId)) {
-      q.removeFiller(args.sessionId, args.userId);
-      next = "off";
-    } else {
-      q.addFiller(args.sessionId, args.userId);
-      next = "on";
-    }
-    scheduleEvaluation(args.sessionId);
-    return next;
-  });
-}
-
-/**
  * Re-render and re-evaluate the active session for a chat. Use after any
  * mutation that affects the session view (roster add/remove, /lfp_stacks
  * change, etc.). No-op if no active session.
@@ -351,7 +231,9 @@ export async function refreshActiveSession(chatId: number): Promise<void> {
   const session = q.getActiveSession(chatId);
   if (!session) return;
   await withMutex(`session:${session.id}`, async () => {
-    await evaluateAndApply(session);
+    const fresh = q.getSession(session.id);
+    if (!fresh || fresh.archived_at !== null || fresh.archive_at <= Date.now()) return;
+    await evaluateAndApply(fresh);
   });
 }
 
@@ -483,20 +365,10 @@ function renderSessionMessage(
     spectatorCount: spectatorIds.size,
   });
   if (opts?.archivedSuffix) body += opts.archivedSuffix;
-  // Hide buttons for slots whose start time has already passed. Tallies and
-  // history stay visible in the body; we just stop accepting fresh votes on
-  // slots that nobody can actually start anymore.
-  const futureSlots = slots.filter(
-    (s) =>
-      slotInstantMs({
-        slotMinutes: s,
-        tz: chat.tz,
-        nowMs: session.opened_at,
-      }) > Date.now(),
-  );
+  // Both group actions resolve the session by ID; saves validate future times.
   const keyboard = renderSessionKeyboard({
     sessionId: session.id,
-    slots: futureSlots,
+    miniAppUrl: getSessionMiniAppLink(session.id),
   });
   return { body, keyboard };
 }
@@ -525,7 +397,10 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   const votes = q.getSessionVotes(session.id);
   const tallies = tallySlots({ slots, votes, rosterIds, skipIds, fillerIds });
   const validStacks = q.parseStacks(chat.valid_stacks);
-  const next = evaluateLock({ tallies, validStacks });
+  const futureTallies = tallies.filter((t) => slotInstantMs({
+    slotMinutes: t.slot, tz: chat.tz, nowMs: session.opened_at,
+  }) > Date.now());
+  const next = evaluateLock({ tallies: futureTallies, validStacks });
   const prev = currentLock(session.id);
   const diff = diffLock(prev, next);
   const availableAtSlot =
@@ -617,6 +492,10 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
     await editGameOnDissolved({ session });
     cancelT15(session.id);
     q.deleteJobsForSession(session.id, "t15");
+  } else if (next.slot !== null) {
+    // A saved No can remove an upgrade nudge without changing the party.
+    // Refresh silently; unchanged locks keep their reminder and emit no post.
+    await editGameOn({ session, lock: next, roster, availableAtSlot, unvotedIds, upgradeTarget });
   }
 }
 
@@ -738,6 +617,12 @@ export async function refreshAllActiveSessions(): Promise<void> {
   log.info(`Refreshing ${sessions.length} active session message(s) on boot.`);
   for (const session of sessions) {
     try {
+      if (session.archive_at <= Date.now()) {
+        // Overdue scheduler jobs may have been dropped during rehydration.
+        // Close these sessions so /lfp can create today's poll after downtime.
+        await archiveSessionFromScheduler(session.id);
+        continue;
+      }
       cancelPendingPollEdit(session.id);
       await flushPollEdit(session.id);
       await refreshGameOnMessage(session.id);

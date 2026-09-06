@@ -216,7 +216,7 @@ export function tryAddFromMessage(ctx: Context): AddedMember[] {
       // We only have an @handle. The Bot API doesn't expose username→user_id
       // resolution for arbitrary chats, so we store with a synthetic negative
       // id derived from the lowercase handle. The real id is bound the first
-      // time this user votes (see callbacks.ts vote handler).
+      // time they open availability or decline (see bot/availability.ts).
       const handle = text.slice(e.offset, e.offset + e.length).replace(/^@/, "");
       const syntheticId = -hashString(handle.toLowerCase());
       // If the same handle is already in the roster (with the real id),

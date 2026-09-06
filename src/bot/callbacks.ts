@@ -1,5 +1,5 @@
 import { bot } from "./instance.js";
-import { isGroup, senderDisplayName } from "./util.js";
+import { senderDisplayName } from "./util.js";
 import * as q from "../db/queries.js";
 import * as session from "./session.js";
 import {
@@ -24,7 +24,9 @@ import {
 import { setPending } from "./wizardState.js";
 import { COMMON_TZS } from "../core/time.js";
 import { log } from "../log.js";
-import { nextVote } from "../core/lock.js";
+import { renderSessionKeyboard } from "../core/render.js";
+import { declineAvailability } from "./availability.js";
+import { ApiError } from "../web/contracts.js";
 
 // ----------------------------------------------------------------------------
 // Wizard
@@ -93,149 +95,43 @@ bot.callbackQuery(/^lfp:wcancel$/, async (ctx) => {
 // Voting (slot tap, bulk no, cancel session)
 // ----------------------------------------------------------------------------
 
-bot.callbackQuery(/^v:(\d+):(\d+)$/, async (ctx) => {
-  if (!ctx.from) return ctx.answerCallbackQuery();
+// Old messages are upgraded in place instead of applying a partial v1 vote.
+bot.callbackQuery(/^(?:v|v2|vbay|vfill):(\d+)(?::\d+)?$/, async (ctx) => {
   const sessionId = Number(ctx.match[1]);
-  const slot = Number(ctx.match[2]);
-
-  // Optimistic toast: predict the next vote value from the current persisted
-  // state, then answer immediately so the button spinner clears and the next
-  // tap registers without delay. Rapid retaps on the same user can race the
-  // prediction (the toast may show "✅" while the actual persisted value lands
-  // on "🤷"); the message-body edit is the source of truth and stays correct.
-  const cur = q.getVote(sessionId, ctx.from.id, slot)?.value ?? null;
-  const predicted = nextVote(cur);
-  const rosterIds = ctx.chat ? q.getRosterIds(ctx.chat.id) : new Set<number>();
-  const willCountForLock = rosterIds.has(ctx.from.id) || rosterIds.has(syntheticIdFor(ctx));
-  ctx.answerCallbackQuery({ text: voteToast(slot, predicted, willCountForLock) }).catch(() => {
-    /* the toast is best-effort */
-  });
-
-  bindSyntheticUsername(ctx);
-
-  try {
-    await session.recordVote({
-      sessionId,
-      userId: ctx.from.id,
-      username: ctx.from.username ?? null,
-      displayName: senderDisplayName(ctx),
-      slot,
-    });
-  } catch (err) {
-    log.warn("vote failed", err);
+  const active = q.getSession(sessionId);
+  if (!active || active.archived_at !== null || active.archive_at <= Date.now()) {
+    await ctx.answerCallbackQuery({ text: "Voting has ended for this session." });
+    return;
   }
+  await ctx.answerCallbackQuery({ text: "Voting moved to the availability picker. Open it below, then Save." });
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: renderSessionKeyboard({
+      sessionId, miniAppUrl: session.getSessionMiniAppLink(sessionId),
+    }) });
+  } catch (error) { log.warn("Could not upgrade an old voting keyboard", error); }
 });
 
-bot.callbackQuery(/^v2:(\d+):(\d+)$/, async (ctx) => {
-  if (!ctx.from) return ctx.answerCallbackQuery();
-  const sessionId = Number(ctx.match[1]);
-  const slot = Number(ctx.match[2]);
-
-  // Optimistic toast — same shape as single-slot, but spans both halves.
-  const cur = q.getVote(sessionId, ctx.from.id, slot)?.value ?? null;
-  const predicted = nextVote(cur);
-  const rosterIds = ctx.chat ? q.getRosterIds(ctx.chat.id) : new Set<number>();
-  const willCountForLock = rosterIds.has(ctx.from.id) || rosterIds.has(syntheticIdFor(ctx));
-  ctx.answerCallbackQuery({ text: comboVoteToast(slot, predicted, willCountForLock) }).catch(() => {
-    /* best-effort */
-  });
-
-  bindSyntheticUsername(ctx);
-
-  try {
-    await session.recordComboVote({
-      sessionId,
-      userId: ctx.from.id,
-      username: ctx.from.username ?? null,
-      displayName: senderDisplayName(ctx),
-      slot,
-    });
-  } catch (err) {
-    log.warn("combo vote failed", err);
-  }
-});
-
+// This complete answer remains available directly in the group, including v1 No buttons.
 bot.callbackQuery(/^vbn:(\d+)$/, async (ctx) => {
-  if (!ctx.from) return ctx.answerCallbackQuery();
-  const sessionId = Number(ctx.match[1]);
-  ctx.answerCallbackQuery({ text: "All slots set to ❌." }).catch(() => {});
-  bindSyntheticUsername(ctx);
   try {
-    await session.bulkNoTonight({ sessionId, userId: ctx.from.id });
-  } catch (err) {
-    log.warn("bulk no failed", err);
+    await declineAvailability(Number(ctx.match[1]), ctx.from);
+  } catch (error) {
+    const text = error instanceof ApiError
+      ? error.status === 403 ? "Only this group's roster can answer. Ask to be added with /lfp_add." : error.message
+      : "Could not save your reply. Please try again.";
+    if (!(error instanceof ApiError)) log.warn("Direct availability decline failed", error);
+    await ctx.answerCallbackQuery({ text, show_alert: true });
+    return;
   }
+  await ctx.answerCallbackQuery({ text: "Saved: you can't play at any remaining start time tonight." });
 });
 
-bot.callbackQuery(/^vbay:(\d+)$/, async (ctx) => {
-  if (!ctx.from) return ctx.answerCallbackQuery();
-  const sessionId = Number(ctx.match[1]);
-  // Answer optimistically; the toggle decides the actual state inside the
-  // mutex and we update the toast below if needed.
-  ctx.answerCallbackQuery({ text: "All slots set to ✅." }).catch(() => {});
-  bindSyntheticUsername(ctx);
-  try {
-    const result = await session.bulkYesToggleTonight({
-      sessionId,
-      userId: ctx.from.id,
-    });
-    if (result === "cleared") {
-      // Best-effort follow-up toast — Telegram only honors one answer per
-      // callback, so the user sees whichever shows first. Swallow errors.
-      ctx
-        .answerCallbackQuery({ text: "Cleared all your votes." })
-        .catch(() => {});
-    }
-  } catch (err) {
-    log.warn("bulk yes failed", err);
-  }
+bot.callbackQuery(/^app:setup:(\d+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery({
+    text: "The availability app is not configured yet. Ask the bot owner to finish Mini App setup.",
+    show_alert: true,
+  });
 });
-
-bot.callbackQuery(/^vfill:(\d+)$/, async (ctx) => {
-  if (!ctx.from) return ctx.answerCallbackQuery();
-  const sessionId = Number(ctx.match[1]);
-  bindSyntheticUsername(ctx);
-  try {
-    const state = await session.toggleFiller({
-      sessionId,
-      userId: ctx.from.id,
-    });
-    const text =
-      state === "on"
-        ? "🛟 Filler mode ON — you'll only play if the team is short."
-        : "🛟 Filler mode OFF — your ✅ votes count normally again.";
-    ctx.answerCallbackQuery({ text }).catch(() => {});
-  } catch (err) {
-    log.warn("toggle filler failed", err);
-    ctx.answerCallbackQuery({ text: "Couldn't toggle filler." }).catch(() => {});
-  }
-});
-
-function voteToast(slot: number, next: ReturnType<typeof nextVote>, isRoster: boolean): string {
-  const slotStr = formatSlotMm(slot);
-  let label: string;
-  if (next === "yes") label = `${slotStr}: ✅`;
-  else if (next === "maybe") label = `${slotStr}: 🤷`;
-  else label = `${slotStr}: ❌`;
-  if (!isRoster) label += " (spectator — doesn't affect lock)";
-  return label;
-}
-
-function comboVoteToast(slot: number, next: ReturnType<typeof nextVote>, isRoster: boolean): string {
-  const h = Math.floor(slot / 60);
-  let label: string;
-  if (next === "yes") label = `${h}-${h + 1}: ✅`;
-  else if (next === "maybe") label = `${h}-${h + 1}: 🤷`;
-  else label = `${h}-${h + 1}: ❌`;
-  if (!isRoster) label += " (spectator — doesn't affect lock)";
-  return label;
-}
-
-function syntheticIdFor(ctx: any): number {
-  const handle = ctx.from?.username;
-  if (!handle) return 0;
-  return -hashString(String(handle).toLowerCase());
-}
 
 bot.callbackQuery(/^xs:(\d+)$/, async (ctx) => {
   const sessionId = Number(ctx.match[1]);
@@ -519,51 +415,3 @@ bot.callbackQuery(/^tz:x$/, async (ctx) => {
 bot.on("callback_query:data", async (ctx) => {
   await ctx.answerCallbackQuery({ text: "🤷" });
 });
-
-// ----------------------------------------------------------------------------
-// Helpers
-// ----------------------------------------------------------------------------
-
-function formatSlotMm(slotMinutes: number): string {
-  const h = Math.floor(slotMinutes / 60);
-  const m = slotMinutes % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-/**
- * If the roster has a synthetic-id entry for the user's @username,
- * replace it with the real Telegram user id so future operations
- * resolve correctly.
- */
-function bindSyntheticUsername(ctx: any): void {
-  if (!ctx.chat || !ctx.from || !ctx.from.username) return;
-  const syntheticId = -hashString(String(ctx.from.username).toLowerCase());
-  const synthetic = q.getRosterMember(ctx.chat.id, syntheticId);
-  if (!synthetic) return;
-  // Don't bind if the real id is already there with a different name.
-  const real = q.getRosterMember(ctx.chat.id, ctx.from.id);
-  q.removeRosterMember(ctx.chat.id, syntheticId);
-  if (!real) {
-    q.addRosterMember(
-      ctx.chat.id,
-      ctx.from.id,
-      ctx.from.username,
-      [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") ||
-        ctx.from.username ||
-        `user${ctx.from.id}`,
-    );
-  }
-  // Best-effort. We avoid recursing into refreshActiveSession here —
-  // the caller's recordVote() already triggers re-evaluation immediately
-  // after this binding completes, with the real id in the roster.
-  void isGroup;
-}
-
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = (h * 31 + s.charCodeAt(i)) | 0;
-    if (h === 0) h = 1;
-  }
-  return Math.abs(h);
-}

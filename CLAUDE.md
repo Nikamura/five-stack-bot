@@ -1,58 +1,82 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for agents working in this repository.
 
 ## Project instructions
 
-Keep `PRD.md` up to date when product behaviour or features change. Replace prior decisions in place — the file holds the current spec only, not the decision history.
+Keep `PRD.md` up to date when product behavior changes. Replace prior decisions in place; it describes the current product, not a decision history. Deployment-specific steps belong in `deploy/HOMELAB.md`.
 
 ## Commands
 
+Use Node.js 22 or newer.
+
 ```bash
-npm run dev         # tsx --watch, loads .env if present
-npm run build       # tsc → dist/
-npm start           # node dist/index.js (post-build)
+npm ci
+npm run dev         # real bot + HTTP server, watches src/, loads .env
+npm run preview     # isolated Mini App demo; no bot token or database
+npm run build       # tsc -> dist/
+npm start           # real bot + HTTP server from dist/, loads .env
 npm run typecheck   # tsc --noEmit
-npm test            # node --test --import tsx 'src/**/*.test.ts'
+npm test            # Node test runner: src/**/*.test.ts and web/*.test.js
 ```
 
-Run a single test file: `node --test --import tsx src/core/lock.test.ts`.
-Filter by name: `node --test --test-name-pattern '<regex>' --import tsx src/core/lock.test.ts`.
+Preview: `http://127.0.0.1:3000/?demo=1`; override with `PREVIEW_PORT`. Real startup requires `BOT_TOKEN`; `DB_PATH` defaults to `./data/five-stack.db`. `MINI_APP_URL` is the configured HTTPS origin; without it, group launch buttons show a setup notice. `WEB_HOST`/`WEB_PORT` control the HTTP listener. Main Mini App uses an empty `MINI_APP_SHORT_NAME`.
 
-`BOT_TOKEN` is required (see `.env.example`). `tsx` watches and reloads `src/`; the SQLite file is created on first boot under `DB_PATH` (default `./data/five-stack.db`).
+Single tests: `node --test --import tsx src/core/lock.test.ts`, or add `--test-name-pattern '<regex>'` before the file. Frontend model/stream tests run directly with `node --test web/*.test.js`.
 
 ## Architecture
 
-Three layers, strict direction `bot/ → core/ → db/`. `core/` has no Telegram or DB imports — it operates on plain values so it can be unit-tested without a live bot or DB.
+- `src/bot/` owns grammY handlers, roster management, per-session orchestration and the availability application service. `commands.ts` and `callbacks.ts` register handlers as import side effects. `session.ts` handles open/evaluate/lock/archive and Telegram message updates. `availability.ts` authorizes roster access and coordinates atomic saved answers.
+- `src/core/` contains slot/time helpers and domain logic. `lock.ts` tallies explicit votes and selects parties; `availability.ts` validates complete submissions and computes per-user revisions. These domain modules perform no database or Telegram calls. `render.ts` is the Telegram rendering adapter, including inline keyboards.
+- `src/db/queries.ts` owns runtime SQLite access. `schema.ts` is applied on boot; `migrate.ts` handles transactional, idempotent migrations.
+- `src/web/contracts.ts` defines JSON DTOs and `ApiError`. `auth.ts` validates Telegram launch data and signs session links. `server.ts` uses Node HTTP with injected load/save services, serves `web/`, and streams snapshots. It does not import bot/config/database modules. `preview.ts` supplies rejecting services for an isolated static demo.
+- `web/` is an unbundled Mini App: HTML/CSS, browser controller, pure draft model, SSE decoder and sample-data module. The production container must copy `web/` alongside `dist/`.
+- `src/scheduler/jobs.ts` persists archive and T-15 timers. Startup rehydrates jobs and refreshes active session/GAME ON messages in place.
 
-- `src/bot/` — grammY handlers and per-session orchestration. `instance.ts` is the singleton bot. `commands.ts` and `callbacks.ts` register handlers as import side effects (see `index.ts`). `session.ts` owns the open / vote / lock / archive flow.
-- `src/core/` — pure logic. `lock.ts` implements the largest-stack-first lock rule from PRD §5.4 (`evaluateLock`, `tallySlots`, `diffLock`). `slots.ts` parses range shortcuts and builds the 30-minute slot grid. `render.ts` builds message bodies and inline keyboards. `time.ts` (luxon) handles per-chat timezones.
-- `src/db/` — `better-sqlite3` singleton. `schema.ts` holds the DDL as a string and is applied unconditionally on boot (every statement is `CREATE TABLE IF NOT EXISTS`). `migrate.ts` handles in-place column migrations that `CREATE IF NOT EXISTS` can't express; it's idempotent and resumes after a mid-migration crash. `queries.ts` is the only module that talks to `db`.
-- `src/scheduler/jobs.ts` — DB-persisted timers (`scheduled_jobs` table) for session auto-archive and the T-15 reminder. `rehydrateJobs()` runs on boot from `src/index.ts`; jobs less than 5 minutes overdue fire immediately, older ones are dropped.
+There is one bot process and one SQLite database. Keep transport authentication, availability business rules and database writes in their respective layers; shared contract imports are allowed.
 
-### Per-session mutex
+## V2 availability invariants
 
-Every mutation that reads-then-writes a session (vote, lock evaluation, archive, bump) is wrapped in `withMutex(\`session:${id}\`, ...)` from `src/bot/mutex.ts`. This is single-process serialization — there's exactly one bot process, one SQLite file. Don't read session state outside the mutex and then write back; you'll race the debounced edit flush and other vote handlers.
+- Opening a session adds the organizer to the roster but creates no votes.
+- Group keyboards use signed `t.me/<bot>?startapp=<token>&mode=compact` URL buttons. Group `web_app` inline buttons are not supported. A named Mini App adds its short-name path; Main Mini App is the default.
+- A second group button, Can't play tonight, immediately submits a complete No answer without opening the Mini App. Check Telegram callback identity, session roster membership and closure; write all future No votes and clear filler/skip atomically. This button press is the submission, with no extra popup or Save step.
+- For unanswered players, the personal answer is the first screen: Choose times (default) or Can't play, then a time grid and explicit Save. Keep Maybe/Only if needed under More options and group details secondary while editing. After Save, and when reopening with an existing answer or skip, show the live group results openly as the main view, with a compact personal summary and Edit availability. Editing loads the saved answer preselected and preserves its values.
+- A new empty selection uses two grid taps: first endpoint, then second endpoint, selecting the inclusive block and switching to individual add/remove taps. The same endpoint twice selects one start; reversed endpoints select the same interval. A pending first endpoint disables Save. Editing an existing selection starts in individual-edit mode. Add a range adds another two-tap block, preserving values already selected; Cancel range abandons the pending block. All times cancels pending selection and selects remaining starts; Clear cancels pending selection, empties the draft and resets range mode.
+- Session bounds are start-inclusive/end-exclusive on the half-hour grid; the two selected range endpoints are inclusive candidate **starts**, not a play-until interval. Keep range selection in the same grid, without dropdown range forms.
+- Preserve existing per-slot Yes/Maybe values, including mixed saved answers, when loading or editing selections. Optional response changes must be deliberate.
+- Mini App draft changes stay local until explicit Save, including its Can't play choice. A Save writes all future slots atomically: selected Yes/Maybe, explicit No elsewhere, filler state and skip removal. Past votes remain unchanged. The direct group Can't play action is a separate complete submission.
+- Require explicit Can't play for an empty submission. Validate exact input keys, future slots, duplicate slots, values and revision server-side.
+- A revision describes only the user's saved answer, filler and skip state. Other players' updates must not invalidate a draft. A conflicting own-answer update requires explicit UI resolution; same-answer retries are idempotent and preserve unchanged vote timestamps/seat priority.
+- Authenticated roster membership is required for reads, SSE and saves. Verified username matching may bind a synthetic negative roster ID, never replace a different positive identity.
+- Old slot/all-Yes/filler callbacks (`v`, `v2`, `vbay`, `vfill`) only replace their keyboard with the new controls; they must not call partial-vote mutations. The legacy `vbn` Can't play callback performs the same complete decline as the new group button.
+- The one-time `2026-09-explicit-availability` migration adds explicit No rows for previously implicit declines. Preserve existing choices; do not reintroduce implicit declines into tallying.
 
-### Debounced poll edits
+## Per-session mutex and notifications
 
-`session.ts` coalesces poll re-renders into one edit per ~1.1s per session (`schedulePollEdit` / `flushPollEdit`). Telegram enforces 1 edit/sec on messages with inline keyboards; vote bursts would otherwise hit `429`. `safeEditMessage` swallows `"message is not modified"` and `"message to edit not found"`, and does one retry on `429` honoring `retry_after`.
+Every availability read/modify/write, lock evaluation, archive and related session mutation uses ``withMutex(`session:${id}`, ...)``. Do not read outside the mutex and later write that stale state back. The public snapshot getter also owns the mutex; code already inside it must use internal helpers rather than reacquire it.
 
-### Message identity vs. session identity
+Save commits the complete database answer, queues evaluation once, and returns the current persisted snapshot. Telegram calls stay off the HTTP save path. Evaluation is debounced about 1.5 seconds, and poll edits about 1.1 seconds. Live clients may see the saved answer before the queued lock update arrives.
 
-Callback handlers route by `sessionId` embedded in `callback_data`, not by `message_id`. `/lfp_bump` (and re-running `/lfp` on an active session) sends a fresh poll message and updates `sessions.poll_message_id`; the old message gets a tombstone edit but its buttons keep working.
+`safeEditMessage` tolerates unchanged/missing messages and retries Telegram 429 once using `retry_after`. `/lfp_bump` updates `poll_message_id`; session links and legacy callbacks route by session ID, not message ID.
 
-### Lock evaluation
+## Lock evaluation
 
-`evaluateLock` walks `validStacks` largest-first. For each size: if a slot has `yes >= stack`, lock the earliest such slot. Else if any slot is "still in play" for that stack (`yes + maybe + notVoted >= stack`), return `null` — wait, don't fall back. Else continue to the next-smallest stack. Default `validStacks` is `{5, 3, 2}` (4 skipped — LoL flex queue doesn't allow it). Session-only skips (`/lfp_skip @user`) count as ❌ for lock purposes; permanent removal uses `/lfp_remove`.
+`evaluateLock` walks enabled sizes largest-first (default 5/3/2). At each size it first takes the earliest future slot with enough normal Yes votes, then the earliest slot where Yes + Maybe + filler reaches that size. Otherwise it immediately tries the next smaller size; unanswered players never block a smaller achievable party.
 
-### Schema notes
+At the same size, an all-Yes start wins over an earlier soft start. A larger soft party wins over a smaller all-Yes party. Seats rank Yes, Maybe, filler, ordered by vote time within categories. Available leftovers are alternates. Session skips count as No. Preserve existing reminder, lateness, maybe nudge, upgrade nudge and alternates-only notification behavior.
 
-The `migrate.ts` flow is the template for new migrations: detect old/new column presence, run inside `db.transaction(() => ...)`, assert the post-state, then drop the old columns. better-sqlite3 rolls back the transaction on throw, so a failed migration preserves the original schema for a retry.
+## HTTP and browser safety
 
-## Conventions
+Only verified raw Telegram `initData` authorizes a request. Validate HMAC, unique fields, bounded age and safe user ID; require the signed `start_param` session capability. Never trust `initDataUnsafe`, a request-body user ID or query-string session ID. Credentials belong in `Authorization: tma <initData>`, never URLs or logs.
 
-- ESM throughout (`"type": "module"` in `package.json`, `module: "NodeNext"`). Relative imports include the `.js` extension even in `.ts` source — required by NodeNext.
-- TypeScript is `strict` with `noUncheckedIndexedAccess` and `noUnusedLocals/Parameters`. Array/Map accesses return `T | undefined` — narrow before use.
-- Tests are colocated `*.test.ts` next to the source they cover, using `node:test` and `node:assert`.
-- Telegram command names can't contain `-`, so `/lfp_cancel` is the on-the-wire form; the hyphenated names in `PRD.md` are spec-only aliases.
+SSE polls authorized snapshots about once per second, ignores server-clock-only differences, and sends 15-second keepalives. Stop on session closure, authentication expiry or roster revocation. Preserve backpressure bounds, reconnect catch-up, connection limits and stream cleanup on `server.close()`.
+
+POST requires the configured same origin and bounded JSON. Static files use an exact allowlist; add any new frontend module there. Retain Telegram-compatible CSP (including the Telegram SDK and web-client frame ancestors). Demo mode stays isolated and cannot bypass API authentication.
+
+## Schema and code conventions
+
+- Use transactions for migrations and multi-row saves. Make migrations safe to rerun and test interrupted/legacy states where relevant.
+- ESM/NodeNext throughout: relative TypeScript imports include `.js`.
+- TypeScript is strict with `noUncheckedIndexedAccess` and unused checks; narrow optional lookups.
+- Tests are colocated and use `node:test`/`node:assert`. Exercise real failure boundaries: partial saves, revisions/retries, access control, migration preservation and open-stream updates.
+- Telegram command names use underscores, such as `/lfp_cancel`.

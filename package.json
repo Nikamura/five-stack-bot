@@ -1,6 +1,6 @@
 {
   "name": "five-stack-bot",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Telegram bot that coordinates 'are we playing tonight?' for League of Legends.",
   "type": "module",
@@ -9,11 +9,12 @@
     "build": "tsc",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "dev": "node --env-file-if-exists=.env --import tsx --watch src/index.ts",
+    "preview": "node --import tsx src/web/preview.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx 'src/**/*.test.ts'"
+    "test": "node --test --import tsx 'src/**/*.test.ts' 'web/*.test.js'"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",

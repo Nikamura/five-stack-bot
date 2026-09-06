@@ -65,34 +65,51 @@ export function addRosterMember(
   username: string | null,
   displayName: string,
 ): boolean {
-  try {
+  return db.transaction(() => {
+    const existing = getRosterMember(chatId, userId);
+    const handle = username?.replace(/^@/, "") ?? null;
+    // An unresolved mention must never shadow an identity already in the roster.
+    if (userId < 0 && handle) {
+      const named = findRosterByUsername(chatId, handle);
+      if (named && named.telegram_user_id !== userId) return false;
+    }
+    // Positive IDs are supplied by Telegram updates (including the opener).
+    // Resolve old placeholders before a rename or username removal loses the link.
+    if (userId > 0 && existing?.username && existing.username.toLowerCase() !== handle?.toLowerCase()) {
+      rebindSyntheticRosterMember({ chatId, userId, username: existing.username, displayName });
+    }
+    if (userId > 0 && handle) {
+      rebindSyntheticRosterMember({ chatId, userId, username: handle, displayName });
+    }
     db.prepare(
       `INSERT INTO roster_members (chat_id, telegram_user_id, username, display_name, added_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).run(chatId, userId, username, displayName, nowMs());
-    return true;
-  } catch {
-    // Already in roster — update name.
-    db.prepare(
-      `UPDATE roster_members SET username = ?, display_name = ?
-       WHERE chat_id = ? AND telegram_user_id = ?`,
-    ).run(username, displayName, chatId, userId);
-    return false;
-  }
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(chat_id, telegram_user_id)
+       DO UPDATE SET username = excluded.username, display_name = excluded.display_name`,
+    ).run(chatId, userId, handle, displayName, nowMs());
+    return existing === null;
+  })();
 }
 
 export function removeRosterMember(chatId: number, userId: number): boolean {
-  const r = db
-    .prepare("DELETE FROM roster_members WHERE chat_id = ? AND telegram_user_id = ?")
-    .run(chatId, userId);
-  return r.changes > 0;
+  return db.transaction(() => {
+    const member = getRosterMember(chatId, userId);
+    if (!member) return false;
+    // Legacy duplicate placeholders must not grant access again after removal.
+    const result = db.prepare(
+      `DELETE FROM roster_members WHERE chat_id = ? AND
+       (telegram_user_id = ? OR (telegram_user_id < 0 AND lower(username) = ?))`,
+    ).run(chatId, userId, member.username?.toLowerCase() ?? null);
+    return result.changes > 0;
+  })();
 }
 
 export function findRosterByUsername(chatId: number, username: string): RosterMember | null {
   const u = username.replace(/^@/, "").toLowerCase();
   const row = db
     .prepare(
-      "SELECT * FROM roster_members WHERE chat_id = ? AND lower(username) = ? LIMIT 1",
+      `SELECT * FROM roster_members WHERE chat_id = ? AND lower(username) = ?
+       ORDER BY telegram_user_id > 0 DESC, added_at ASC LIMIT 1`,
     )
     .get(chatId, u) as RosterMember | undefined;
   return row ?? null;
@@ -106,6 +123,82 @@ export function getRosterMember(chatId: number, userId: number): RosterMember | 
       )
       .get(chatId, userId) as RosterMember | undefined) ?? null
   );
+}
+
+/** Merge unresolved username entries into a Telegram-verified identity. */
+export function rebindSyntheticRosterMember(args: {
+  chatId: number;
+  userId: number;
+  username: string;
+  displayName: string;
+}): boolean {
+  if (!Number.isSafeInteger(args.userId) || args.userId <= 0) return false;
+  return db.transaction(() => {
+    const handle = args.username.replace(/^@/, "");
+    // A recycled username must not let its new owner claim a legacy duplicate.
+    // Only the already-recorded identity may reconcile that name's placeholders.
+    const otherOwner = db.prepare(
+      `SELECT 1 FROM roster_members WHERE chat_id = ? AND telegram_user_id > 0
+       AND telegram_user_id <> ? AND lower(username) = ? LIMIT 1`,
+    ).get(args.chatId, args.userId, handle.toLowerCase());
+    if (otherOwner) return false;
+    const real = getRosterMember(args.chatId, args.userId);
+    // Direct Mini App binding can also rename a known identity. Reconcile its
+    // stored name first, while the old placeholders still have a known owner.
+    const reconciledPrevious = real?.username && real.username.replace(/^@/, "").toLowerCase() !== handle.toLowerCase()
+      ? rebindSyntheticRosterMember({ ...args, username: real.username })
+      : false;
+    const synthetic = db.prepare(
+      `SELECT * FROM roster_members WHERE chat_id = ? AND telegram_user_id < 0
+       AND lower(username) = ? ORDER BY added_at ASC, telegram_user_id ASC`,
+    ).all(args.chatId, handle.toLowerCase()) as RosterMember[];
+    const first = synthetic[0];
+    if (!first) return reconciledPrevious;
+    if (!real) {
+      db.prepare(
+        `UPDATE roster_members SET telegram_user_id = ?, username = ?, display_name = ?
+         WHERE chat_id = ? AND telegram_user_id = ?`,
+      ).run(args.userId, handle, args.displayName, args.chatId, first.telegram_user_id);
+    } else {
+      db.prepare("UPDATE roster_members SET username = ?, display_name = ? WHERE chat_id = ? AND telegram_user_id = ?")
+        .run(handle, args.displayName, args.chatId, args.userId);
+    }
+    // An existing real answer owns its flags, including the absence of skip/filler.
+    const realAnswerSessions = new Set((db.prepare(
+      `SELECT session_id FROM (
+         SELECT session_id FROM votes WHERE telegram_user_id = ?
+         UNION SELECT session_id FROM session_skips WHERE telegram_user_id = ?
+         UNION SELECT session_id FROM session_fillers WHERE telegram_user_id = ?
+       ) JOIN sessions ON sessions.id = session_id WHERE sessions.chat_id = ?`,
+    ).all(args.userId, args.userId, args.userId, args.chatId) as { session_id: number }[]).map((row) => row.session_id));
+    for (const placeholder of synthetic) {
+      // Existing real-id rows win every key conflict, preserving their timestamps.
+      for (const table of ["votes", "session_skips", "session_fillers", "lock_party", "lock_late"]) {
+        if (table === "session_skips" || table === "session_fillers") {
+          const rows = db.prepare(`SELECT session_id FROM ${table} WHERE telegram_user_id = ?
+            AND session_id IN (SELECT id FROM sessions WHERE chat_id = ?)`).all(placeholder.telegram_user_id, args.chatId) as { session_id: number }[];
+          for (const row of rows) {
+            if (!realAnswerSessions.has(row.session_id)) {
+              db.prepare(`UPDATE OR IGNORE ${table} SET telegram_user_id = ? WHERE telegram_user_id = ? AND session_id = ?`)
+                .run(args.userId, placeholder.telegram_user_id, row.session_id);
+            }
+          }
+        } else {
+          db.prepare(
+            `UPDATE OR IGNORE ${table} SET telegram_user_id = ? WHERE telegram_user_id = ?
+             AND session_id IN (SELECT id FROM sessions WHERE chat_id = ?)`,
+          ).run(args.userId, placeholder.telegram_user_id, args.chatId);
+        }
+        db.prepare(
+          `DELETE FROM ${table} WHERE telegram_user_id = ?
+           AND session_id IN (SELECT id FROM sessions WHERE chat_id = ?)`,
+        ).run(placeholder.telegram_user_id, args.chatId);
+      }
+      db.prepare("DELETE FROM roster_members WHERE chat_id = ? AND telegram_user_id = ?")
+        .run(args.chatId, placeholder.telegram_user_id);
+    }
+    return true;
+  })();
 }
 
 // -- Sessions -----------------------------------------------------------------
@@ -270,6 +363,30 @@ export function getUserVotes(sessionId: number, userId: number): VoteRow[] {
       "SELECT * FROM votes WHERE session_id = ? AND telegram_user_id = ?",
     )
     .all(sessionId, userId) as VoteRow[];
+}
+
+/** Commit one complete future answer without rewriting history or vote priority. */
+export function saveUserAvailability(args: {
+  sessionId: number;
+  userId: number;
+  votes: Array<{ slot: number; value: VoteValue }>;
+  filler: boolean;
+}): void {
+  db.transaction(() => {
+    const statement = db.prepare(
+      `INSERT INTO votes (session_id, telegram_user_id, slot_minutes, value, voted_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(session_id, telegram_user_id, slot_minutes)
+       DO UPDATE SET value = excluded.value, voted_at = excluded.voted_at
+       WHERE votes.value <> excluded.value`,
+    );
+    const now = nowMs();
+    for (const vote of args.votes) statement.run(args.sessionId, args.userId, vote.slot, vote.value, now);
+    db.prepare("DELETE FROM session_skips WHERE session_id = ? AND telegram_user_id = ?")
+      .run(args.sessionId, args.userId);
+    if (args.filler) addFiller(args.sessionId, args.userId);
+    else removeFiller(args.sessionId, args.userId);
+  })();
 }
 
 // -- Skips --------------------------------------------------------------------

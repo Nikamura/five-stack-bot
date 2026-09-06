@@ -78,10 +78,7 @@ describe("tallySlots", () => {
     assert.equal(t[0]!.fillerAvailable, 0);
   });
 
-  it("counts an engaged voter as implicit ❌ on slots they didn't vote on", () => {
-    // Two slots; users 1 and 2 vote ✅ only at 18:00. At 18:30 they're
-    // implicit ❌ because they engaged with voting but skipped the slot.
-    // User 3 (silent on both slots) stays pending.
+  it("keeps untouched slots unknown even after someone votes elsewhere", () => {
     const slots = [1080, 1110];
     const roster = new Set([1, 2, 3]);
     const votes: VoteRow[] = [vote(1, 1080, "yes", 1), vote(2, 1080, "yes", 2)];
@@ -96,11 +93,11 @@ describe("tallySlots", () => {
     assert.equal(t[0]!.yes, 2);
     assert.equal(t[0]!.no, 0);
     assert.equal(t[0]!.notVoted, 1);
-    // 18:30: users 1+2 implicit ❌, user 3 still pending.
+    // One selection must not silently decline every other time.
     assert.equal(t[1]!.yes, 0);
-    assert.equal(t[1]!.no, 2);
-    assert.equal(t[1]!.notVoted, 1);
-    assert.deepEqual([...t[1]!.noUserIds].sort(), [1, 2]);
+    assert.equal(t[1]!.no, 0);
+    assert.equal(t[1]!.notVoted, 3);
+    assert.deepEqual(t[1]!.noUserIds, []);
   });
 
   it("a fully-unvoted user remains in notVoted", () => {
@@ -114,9 +111,8 @@ describe("tallySlots", () => {
       skipIds: new Set(),
       fillerIds: new Set(),
     });
-    // 18:30: user 1 implicit ❌, users 2+3 still pending.
-    assert.equal(t[1]!.no, 1);
-    assert.equal(t[1]!.notVoted, 2);
+    assert.equal(t[1]!.no, 0);
+    assert.equal(t[1]!.notVoted, 3);
   });
 });
 

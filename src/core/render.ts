@@ -1,6 +1,5 @@
 import { InlineKeyboard } from "grammy";
 import type { LockResult, SlotTally } from "./lock.js";
-import { tentativeLock } from "./lock.js";
 import { compressSlotRanges, formatSlot } from "./slots.js";
 import type { RosterMember, SessionRow } from "../db/types.js";
 import {
@@ -14,6 +13,11 @@ import { COMMON_TZS } from "./time.js";
 // ============================================================================
 // Session message
 // ============================================================================
+
+function startTimeRange(startMinutes: number, endMinutes: number): string {
+  const lastStart = endMinutes - 30;
+  return startMinutes === lastStart ? formatSlot(startMinutes) : `${formatSlot(startMinutes)}–${formatSlot(lastStart)}`;
+}
 
 export function renderSessionBody(args: {
   session: SessionRow;
@@ -38,69 +42,29 @@ export function renderSessionBody(args: {
     spectatorCount,
   } = args;
   const opener = escapeHtml(session.opener_display_name);
-  const range = `${formatSlot(session.start_minutes)}–${formatSlot(session.end_minutes)}`;
+  const range = startTimeRange(session.start_minutes, session.end_minutes);
   const rosterStr = roster.length === 0 ? "<i>(empty)</i>" : mentionList(roster);
-  const largestStack = validStacks[0];
-  const rosterById = new Map(roster.map((m) => [m.telegram_user_id, m]));
-
-  const lines: string[] = [];
-  lines.push(`🎮 <b>${opener}</b> is looking for a party tonight! (${range})`);
-  lines.push(`Roster: ${rosterStr}`);
-  lines.push("");
-  lines.push("<pre>");
-  for (const t of tallies) {
-    const isLocked = lock && lock.slot === t.slot;
-    const tag = isLocked ? `   ← 🔒 ${lock!.size}-stack locked` : hint(t, lock, largestStack);
-    const fillerTag = t.fillerAvailable > 0 ? `   🛟 ${t.fillerAvailable}` : "";
-    lines.push(
-      `  ${formatSlot(t.slot)}  ✅ ${t.yes}   🤷 ${t.maybe}   ❌ ${t.no}${fillerTag}${tag}`,
-    );
+  const responded = new Set(tallies.flatMap((t) => [
+    ...t.yesUserIds, ...t.maybeUserIds, ...t.noUserIds, ...t.fillerAvailableUserIds,
+  ]));
+  const lines = [
+    `🎮 <b>${opener}</b> is looking for a party!`,
+    `Start times: <b>${range}</b> · ${validStacks.join(" / ")}-player parties`,
+    `Roster: ${rosterStr}`,
+    "",
+  ];
+  if (lock?.slot !== null && lock?.slot !== undefined) {
+    lines.push(`🔒 <b>${lock.size}-stack at ${formatSlot(lock.slot)}</b>`);
+  } else {
+    lines.push("Waiting for enough overlapping availability.");
   }
-  lines.push("</pre>");
-
-  // Per-voter summary: lists each roster member with their compressed slot
-  // ranges. Much more compact than per-row names when most slots agree.
-  const voterLines = voterSummary({ roster, tallies, skipIds, fillerIds, totalSlots });
-  if (voterLines.length > 0) {
-    lines.push(...voterLines);
-  }
-
-  lines.push("<i>Tap a slot to cycle ✅ → 🤷 → ❌. The HH-HH+1 button toggles the whole hour at once. ✅ All sets every slot to yes; 🚫 sets every slot to no. 🛟 Filler means \"I'll play only if the team is short.\"</i>");
-
-  if (!lock || lock.slot === null) {
-    const tentative = tentativeLock({ tallies, validStacks });
-    if (tentative) {
-      const slotTally = tallies.find((t) => t.slot === tentative.slot);
-      const ranked = [
-        ...(slotTally?.yesUserIds ?? []),
-        ...(slotTally?.maybeUserIds ?? []),
-        ...(slotTally?.fillerAvailableUserIds ?? []),
-      ];
-      const maybeSet = new Set(slotTally?.maybeUserIds ?? []);
-      const fillerSet = new Set(slotTally?.fillerAvailableUserIds ?? []);
-      const coreNames = ranked
-        .slice(0, tentative.size)
-        .map((id) => {
-          const name = rosterById.get(id)?.display_name;
-          if (!name) return null;
-          const escaped = escapeHtml(name);
-          if (fillerSet.has(id)) return `${escaped} 🛟`;
-          if (maybeSet.has(id)) return `${escaped} 🤷`;
-          return escaped;
-        })
-        .filter((n): n is string => !!n)
-        .join(", ");
-      const withClause = coreNames ? ` with ${coreNames}` : "";
-      lines.push(
-        `⏳ Could play <b>${tentative.size}-stack at ${formatSlot(tentative.slot)}</b>${withClause} — ` +
-          `waiting on more votes for a bigger party.`,
-      );
-    }
-  }
-
-  if (spectatorCount > 0) {
-    lines.push(`+${spectatorCount} spectator${spectatorCount === 1 ? "" : "s"} interested`);
-  }
+  lines.push(`Saved replies: <b>${responded.size}/${roster.length}</b>`, "");
+  lines.push(...voterSummary({ roster, tallies, skipIds, fillerIds, totalSlots }));
+  const pending = roster.filter((m) => !responded.has(m.telegram_user_id));
+  if (pending.length) lines.push(`⏳ Not answered: ${mentionList(pending)}`);
+  lines.push("", "Open <b>Set my availability</b> to see live replies and choose your start times. Picker changes count only after <b>Save</b>.");
+  lines.push("Or tap <b>Can’t play tonight</b> here to decline all remaining start times immediately.");
+  if (spectatorCount > 0) lines.push(`+${spectatorCount} spectator${spectatorCount === 1 ? "" : "s"} interested`);
   return lines.join("\n");
 }
 
@@ -170,54 +134,15 @@ function voterSummary(args: {
   return out;
 }
 
-function hint(t: SlotTally, lock: LockResult | null, largestStack: number | undefined): string {
-  if (lock && lock.slot !== null) return "";
-  if (typeof largestStack !== "number") return "";
-  if (t.yes >= largestStack) return "";
-  if (
-    t.yes + t.maybe + t.fillerAvailable + t.notVoted >= largestStack &&
-    t.notVoted > 0
-  ) {
-    return `   (${largestStack}-stack still possible: ${t.notVoted} not voted)`;
-  }
-  return "";
-}
-
-/**
- * Lay out one row per hour. For each hour H covered by the session, show:
- *   `[H:00]  [H:30]  [H-(H+1)]`
- * The first two cast a vote on a single 30-min slot. The third is a combo
- * that toggles both 30-min slots in the hour at once, so a player who's
- * available for the full hour can express that with one tap.
- *
- * If the session range only includes one of the two half-slots in a given
- * hour (e.g. a 21:30–22:30 session covers [21:30] and [22:00], but only the
- * second half of 21:00 and only the first half of 22:00), the combo button
- * is omitted for that hour — there's no second slot to toggle.
- */
+/** A group-safe URL button launches the personal Mini App using a signed session link. */
 export function renderSessionKeyboard(args: {
   sessionId: number;
-  slots: number[];
+  miniAppUrl?: string | null;
 }): InlineKeyboard {
-  const { sessionId, slots } = args;
   const kb = new InlineKeyboard();
-  const slotSet = new Set(slots);
-  const hours = new Set<number>();
-  for (const s of slots) hours.add(Math.floor(s / 60));
-  const sortedHours = [...hours].sort((a, b) => a - b);
-  for (const h of sortedHours) {
-    const a = h * 60;
-    const b = h * 60 + 30;
-    const hasA = slotSet.has(a);
-    const hasB = slotSet.has(b);
-    if (hasA) kb.text(formatSlot(a), `v:${sessionId}:${a}`);
-    if (hasB) kb.text(formatSlot(b), `v:${sessionId}:${b}`);
-    if (hasA && hasB) kb.text(`${h}-${h + 1}`, `v2:${sessionId}:${a}`);
-    kb.row();
-  }
-  kb.text("✅ All times work", `vbay:${sessionId}`);
-  kb.text("🚫 I can't play tonight", `vbn:${sessionId}`).row();
-  kb.text("🛟 I can fill if needed", `vfill:${sessionId}`);
+  if (args.miniAppUrl) kb.url("📅 Set my availability", args.miniAppUrl);
+  else kb.text("📅 Set my availability", `app:setup:${args.sessionId}`);
+  kb.row().text("🚫 Can’t play tonight", `vbn:${args.sessionId}`);
   return kb;
 }
 
@@ -295,7 +220,7 @@ export function renderGameOn(args: {
     if (mentions) {
       lines.push(
         "",
-        `🔔 ${mentions} — tap ✅ on ${formatSlot(args.slot)} to upgrade to a ${args.upgradeTarget}-stack.`,
+        `🔔 ${mentions} — save your availability for ${formatSlot(args.slot)} to upgrade to a ${args.upgradeTarget}-stack.`,
       );
     }
   }
@@ -313,7 +238,7 @@ export function renderGameOnKeyboard(sessionId: number): InlineKeyboard {
  * any core seat is held by a maybe voter.
  */
 export function renderMaybeNudge(maybeMentions: string): string {
-  return `🤷 ${maybeMentions} — you're in the party as a maybe. Tap ✅ on the locked slot to confirm you're playing.`;
+  return `🤷 ${maybeMentions} — you're in the party as a maybe. Open your availability, change the locked start to Yes, and Save to confirm you're playing.`;
 }
 
 export function renderT15(coreMentions: string): string {
@@ -375,7 +300,7 @@ export function wizardStep1Keyboard(): InlineKeyboard {
 }
 
 export function wizardStep2Text(startMinutes: number): string {
-  return `🎮 Start: ${formatSlot(startMinutes)}. Latest end?`;
+  return `🎮 Earliest start: ${formatSlot(startMinutes)}. When should the start window end? The selected end is excluded.`;
 }
 
 export function wizardStep2Keyboard(startMinutes: number): InlineKeyboard {
@@ -403,7 +328,7 @@ export function wizardStep3Text(args: {
   const skipped = [5, 4, 3, 2].filter((s) => !args.validStacks.includes(s));
   const skipStr = skipped.length ? ` (skip ${skipped.join(",")})` : "";
   return [
-    `🎮 Open session ${formatSlot(args.startMinutes)}–${formatSlot(args.endMinutes)} tonight?`,
+    `🎮 Open a session with start times ${startTimeRange(args.startMinutes, args.endMinutes)} tonight?`,
     `   Stack priority: ${stackLine}${skipStr}`,
     `   Roster: ${args.rosterSize} player${args.rosterSize === 1 ? "" : "s"}`,
   ].join("\n");
@@ -575,7 +500,9 @@ export const HELP_TEXT = [
   "",
   "  /help               This message.",
   "",
-  "Most commands open an inline keyboard when run with no arguments.",
+  "Tap Set my availability on the group poll to open your personal picker.",
+  "Choose possible start times, review your answer, then Save. Live group replies update while you edit.",
+  "Or tap Can’t play tonight directly on the group poll to decline all remaining starts immediately.",
 ].join("\n");
 
 // ============================================================================

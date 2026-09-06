@@ -6,6 +6,8 @@ import "./bot/commands.js";
 import "./bot/callbacks.js";
 import { rehydrateJobs } from "./scheduler/jobs.js";
 import { refreshAllActiveSessions } from "./bot/session.js";
+import { getAvailabilitySnapshot, saveAvailability } from "./bot/availability.js";
+import { createMiniAppServer } from "./web/server.js";
 
 setLogLevel(config.logLevel);
 
@@ -14,6 +16,23 @@ bot.catch((err) => {
 });
 
 async function main() {
+  // Initialize identity before rendering signed Mini App links into group polls.
+  await bot.init();
+  const server = createMiniAppServer({
+    botToken: config.botToken,
+    publicUrl: config.miniAppUrl || `http://127.0.0.1:${config.webPort}`,
+    loadSession: getAvailabilitySnapshot,
+    saveAvailability,
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(config.webPort, config.webHost, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  log.info(`Mini App listening on ${config.webHost}:${config.webPort}`);
+  if (!config.miniAppUrl) log.warn("MINI_APP_URL is unset; configure it to enable group launch buttons.");
   // Re-arm scheduled jobs that survived a restart.
   await rehydrateJobs();
 
@@ -39,10 +58,12 @@ async function main() {
   process.once("SIGINT", () => {
     log.info("SIGINT — stopping");
     bot.stop();
+    server.close();
   });
   process.once("SIGTERM", () => {
     log.info("SIGTERM — stopping");
     bot.stop();
+    server.close();
   });
 
   log.info(`Starting bot, db=${config.dbPath}, defaultTz=${config.defaultTz}`);

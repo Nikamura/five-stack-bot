@@ -1,0 +1,18 @@
+# Overlay for the existing homelab bots stack, NOT docker-compose.yml in this repo.
+# Merge these settings into /opt/stacks/bots/compose.yaml for a permanent rollout,
+# or include this file with -f on every subsequent Compose invocation.
+services:
+  five-stack-bot:
+    environment:
+      MINI_APP_URL: https://five-stack-bot.cn.lt
+      MINI_APP_SHORT_NAME: ""
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "3000"
+    networks:
+      default: {}
+      miniapp_proxy: {}
+
+networks:
+  miniapp_proxy:
+    external: true
+    name: caddy_default

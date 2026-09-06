@@ -78,12 +78,9 @@ export function parseRangeArg(arg: string): { startMinutes: number; endMinutes: 
 
 /**
  * Compress a list of 30-minute slot starts into a comma-separated list of
- * runs, expressed in HH:MM-HH:MM form where the upper bound is the *end*
- * of the last slot in the run (so `[1080, 1110]` → `"18:00-19:00"`,
- * not `"18:00-18:30"`).
- *
- * Single-slot runs render as `HH:MM-HH:MM` too (start of slot to end of
- * slot, e.g. `[1080]` → `"18:00-18:30"`) — keeps the convention uniform.
+ * runs, expressed as inclusive candidate start times. `[1080, 1110]`
+ * becomes `"18:00-18:30"`; a single start `[1080]` becomes `"18:00"`.
+ * These are possible start times, not intervals of time committed to play.
  */
 export function compressSlotRanges(slots: number[]): string {
   if (slots.length === 0) return "";
@@ -103,7 +100,7 @@ export function compressSlotRanges(slots: number[]): string {
   }
   ranges.push({ start, end: prev });
   return ranges
-    .map((r) => `${formatSlot(r.start)}-${formatSlot(r.end + SLOT_MIN)}`)
+    .map((r) => r.start === r.end ? formatSlot(r.start) : `${formatSlot(r.start)}-${formatSlot(r.end)}`)
     .join(", ");
 }
 

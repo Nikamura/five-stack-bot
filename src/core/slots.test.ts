@@ -124,22 +124,22 @@ describe("parseStacksArg", () => {
 
 describe("compressSlotRanges", () => {
   it("handles a single contiguous run", () => {
-    // 18:00, 18:30, 19:00, 19:30 → 18:00-20:00
-    assert.equal(compressSlotRanges([1080, 1110, 1140, 1170]), "18:00-20:00");
+    assert.equal(compressSlotRanges([1080, 1110, 1140, 1170]), "18:00-19:30");
   });
   it("splits non-contiguous runs", () => {
-    // 18:00, 19:00 (gap), 19:30 → 18:00-18:30, 19:00-20:00
-    assert.equal(compressSlotRanges([1080, 1140, 1170]), "18:00-18:30, 19:00-20:00");
+    assert.equal(compressSlotRanges([1080, 1140, 1170]), "18:00, 19:00-19:30");
   });
-  it("renders end=24:00 for the last slot of a midnight session", () => {
-    // 23:00, 23:30 (last slot of 22-24 session) → 23:00-24:00
-    assert.equal(compressSlotRanges([1380, 1410]), "23:00-24:00");
+  it("keeps the last possible start at 23:30 for a midnight session", () => {
+    assert.equal(compressSlotRanges([1380, 1410]), "23:00-23:30");
+  });
+  it("shows one selected start without implying the next half-hour", () => {
+    assert.equal(compressSlotRanges([780]), "13:00");
   });
   it("returns empty string for empty input", () => {
     assert.equal(compressSlotRanges([]), "");
   });
   it("dedupes input", () => {
-    assert.equal(compressSlotRanges([1080, 1080, 1110]), "18:00-19:00");
+    assert.equal(compressSlotRanges([1080, 1080, 1110]), "18:00-18:30");
   });
 });
 

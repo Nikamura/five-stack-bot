@@ -1,0 +1,7 @@
+# Add this site block to the existing /opt/stacks/caddy/Caddyfile.
+# Authentication is handled by signed Telegram initData at /api/*.
+five-stack-bot.cn.lt {
+	reverse_proxy five-stack-bot:3000 {
+		flush_interval -1
+	}
+}

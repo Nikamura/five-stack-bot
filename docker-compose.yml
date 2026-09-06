@@ -9,5 +9,11 @@ services:
       - DB_PATH=/app/data/five-stack.db
       - DEFAULT_TZ=${DEFAULT_TZ:-Europe/Vilnius}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - MINI_APP_URL=${MINI_APP_URL:-https://five-stack-bot.cn.lt}
+      - MINI_APP_SHORT_NAME=${MINI_APP_SHORT_NAME:-}
+      - WEB_HOST=0.0.0.0
+      - WEB_PORT=3000
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
     volumes:
       - ./data:/app/data

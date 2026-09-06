@@ -126,4 +126,48 @@ describe("migrate", () => {
     assert.equal(cols.has("start_hour"), true);
     assert.equal(cols.has("end_hour"), true);
   });
+
+  it("preserves legacy implicit declines exactly once without inventing new responses", () => {
+    const db = makeDb();
+    db.exec(SCHEMA);
+    db.exec(`
+      INSERT INTO chats VALUES (1, 'UTC', '5,3,2', 0);
+      INSERT INTO roster_members VALUES (1, 1, 'one', 'One', 0), (1, 2, 'two', 'Two', 0);
+      INSERT INTO sessions (id, chat_id, opener_user_id, opener_display_name, start_minutes, end_minutes, opened_at, archive_at)
+        VALUES (1, 1, 1, 'One', 720, 810, 0, 1000);
+      INSERT INTO votes VALUES (1, 1, 750, 'yes', 123), (1, 99, 750, 'maybe', 456);
+    `);
+    migrate(db);
+    const votes = () => db.prepare("SELECT telegram_user_id, slot_minutes, value, voted_at FROM votes ORDER BY telegram_user_id, slot_minutes").all();
+    assert.deepEqual(votes(), [
+      { telegram_user_id: 1, slot_minutes: 720, value: "no", voted_at: 123 },
+      { telegram_user_id: 1, slot_minutes: 750, value: "yes", voted_at: 123 },
+      { telegram_user_id: 1, slot_minutes: 780, value: "no", voted_at: 123 },
+      { telegram_user_id: 99, slot_minutes: 750, value: "maybe", voted_at: 456 },
+    ]);
+    db.exec("INSERT INTO votes VALUES (1, 2, 750, 'yes', 789)");
+    migrate(db);
+    assert.equal(votes().length, 5); // a new partial answer stays partial after restart
+    db.close();
+  });
+
+  it("rolls back materialization and its marker when an insert fails", () => {
+    const db = makeDb();
+    db.exec(SCHEMA);
+    db.exec(`
+      INSERT INTO chats VALUES (1, 'UTC', '5,3,2', 0);
+      INSERT INTO roster_members VALUES (1, 1, 'one', 'One', 0);
+      INSERT INTO sessions (id, chat_id, opener_user_id, opener_display_name, start_minutes, end_minutes, opened_at, archive_at)
+        VALUES (1, 1, 1, 'One', 720, 810, 0, 1000);
+      INSERT INTO votes VALUES (1, 1, 750, 'yes', 123);
+      CREATE TRIGGER fail_decline BEFORE INSERT ON votes WHEN NEW.value = 'no'
+        BEGIN SELECT RAISE(ABORT, 'test insert failure'); END;
+    `);
+    assert.throws(() => migrate(db), /test insert failure/);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM votes").get() as { n: number }).n, 1);
+    db.exec("DROP TRIGGER fail_decline");
+    migrate(db);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM votes").get() as { n: number }).n, 3);
+    db.close();
+  });
 });

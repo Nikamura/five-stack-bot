@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f0f5fa">
+    <meta name="referrer" content="no-referrer">
+    <title>Five Stack · Availability</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <main class="app">
+      <header class="app-header">
+        <a class="brand" href="#top" aria-label="Five Stack, top of page"><span class="stack-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>five stack</a>
+        <span class="connection" id="connection" role="status">Connecting</span>
+      </header>
+      <div class="demo-banner" id="demo-banner" hidden><strong>Demo</strong> · Sample players. Nothing is sent to your group.</div>
+      <div class="notice" id="connection-notice" hidden><span id="connection-message"></span><button class="text-button" id="retry" type="button">Reconnect</button></div>
+      <section id="loading" class="loading" aria-live="polite"><span class="loading-mark" aria-hidden="true"></span><h1>Getting the group together</h1><p>Loading saved availability…</p></section>
+      <section id="fatal" class="empty-state" hidden><h1 id="fatal-title">Open from Telegram</h1><p id="fatal-message"></p><button id="fatal-retry" class="primary" type="button" hidden>Try again</button></section>
+      <div id="content" hidden>
+        <section class="session-heading" id="top" aria-labelledby="session-title">
+          <p class="eyebrow" id="session-date"></p>
+          <h1 id="session-title">When can you play?</h1>
+          <p class="muted" id="session-meta"></p>
+          <div id="closed-banner" class="notice" hidden>This session has ended. Saved answers are shown below.</div>
+        </section>
+        <section id="saved-view" class="saved-view" hidden aria-labelledby="saved-title">
+          <div class="saved-top"><h2 id="saved-title">Your availability is saved</h2><button id="edit" class="text-button" type="button">Edit availability</button></div>
+          <p id="saved-summary"></p>
+          <div class="saved-bottom"><p class="caption" id="saved-note">The group will keep updating here.</p><button id="back-to-chat" class="text-button" type="button" hidden>Back to chat</button></div>
+        </section>
+        <section id="editor" class="editor" aria-labelledby="editor-title">
+          <h2 id="editor-title" class="sr-only">Your availability</h2>
+          <div class="saved-status-row"><p class="caption" id="editor-saved-status">Not answered yet</p><button id="cancel" class="text-button" type="button" hidden>Cancel changes</button></div>
+          <div class="notice conflict" id="conflict" role="alert" hidden>
+            <strong>Your saved answer changed elsewhere.</strong>
+            <p id="conflict-saved"></p>
+            <p>Your draft is still here. Choose which answer to use.</p>
+            <div class="conflict-actions"><button type="button" id="reload-saved" class="secondary">Load saved answer</button><button type="button" id="keep-draft" class="secondary">Keep my draft</button></div>
+          </div>
+          <form id="availability-form" novalidate>
+            <fieldset id="edit-fields">
+              <legend class="sr-only">Your availability</legend>
+              <div class="response-grid" aria-label="Your availability">
+                <button type="button" data-mode="times" aria-pressed="true">Choose times</button>
+                <button type="button" data-mode="no" aria-pressed="false">Can’t play</button>
+              </div>
+              <div id="times">
+                <div class="time-toolbar"><p id="time-instruction">1. Tap earliest start.</p><div><button type="button" id="all-times" class="text-button">All times</button><button type="button" id="clear-times" class="text-button">Clear</button></div></div>
+                <div id="time-grid" class="time-grid" aria-label="Your possible start times"></div>
+                <div class="range-toolbar"><p id="grid-note" class="caption grid-note">Two taps select a range. Counts are saved replies.</p><button id="add-range" type="button" class="text-button" hidden>Add a range</button><button id="cancel-range" type="button" class="text-button" hidden>Cancel range</button></div>
+                <details id="more-options" class="more-options">
+                  <summary>More options <span id="response-badge" class="caption"></span></summary>
+                  <label class="response-label" for="response-type">Response for selected times</label>
+                  <select id="response-type">
+                    <option value="yes">I’m in</option>
+                    <option value="maybe">Maybe</option>
+                    <option value="filler">Only if needed</option>
+                    <option value="mixed" id="mixed-response" disabled hidden>Mixed saved replies</option>
+                  </select>
+                  <p id="response-note" class="caption"></p>
+                </details>
+              </div>
+            </fieldset>
+            <div class="answer-review" aria-live="polite"><p id="draft-summary">No times selected yet.</p><p id="draft-outside" class="caption">Nothing changes until you save.</p></div>
+            <div class="notice error" id="save-error" role="alert" hidden></div>
+            <div class="save-dock" id="save-dock"><button type="submit" class="primary" id="save" disabled>Save availability</button><p class="caption" id="save-note">Nothing changes until Save.</p></div>
+          </form>
+        </section>
+        <section id="group-section" class="group-section" aria-labelledby="group-title">
+          <div class="section-top"><h2 id="group-title">The group, so far</h2><span id="reply-count" class="caption"></span></div>
+          <p id="overlap" class="overlap"></p>
+          <p id="party" class="party" hidden></p>
+          <details id="group-details" class="group-details">
+            <summary id="group-disclosure">See everyone’s answers <span class="caption" id="roster-count"></span></summary>
+            <p id="waiting-summary" class="waiting-summary" hidden></p>
+            <ul id="players" class="players"></ul>
+            <section id="start-lineups" class="start-lineups" aria-labelledby="start-lineups-title" hidden>
+              <h3 id="start-lineups-title">Who’s available at each start</h3>
+              <p class="caption">Consecutive starts with the same lineup are grouped.</p>
+              <div id="lineups"></div>
+            </section>
+            <div class="time-rail" id="time-rail" aria-label="Saved availability by start time"></div>
+            <div id="slot-detail" class="slot-detail"></div>
+            <p class="caption group-footnote" id="group-meta"></p>
+          </details>
+        </section>
+        <section id="demo-controls" class="demo-controls" hidden><p class="eyebrow">Try the live flow</p><button id="demo-update" type="button" class="secondary">Simulate another player saving</button><p class="caption">Your unfinished selection will stay exactly as you left it.</p></section>
+      </div>
+      <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+    </main>
+  </body>
+</html>

@@ -54,11 +54,8 @@ interface TallyArgs {
  * counted as a strict ✅ — that way they only complete the stack when
  * non-filler ✅ alone falls short. ❌ from a filler is still ❌.
  *
- * A roster member who has voted on AT LEAST ONE slot in this session is
- * treated as an implicit ❌ on every slot they didn't vote on. The signal:
- * if they engaged with voting, the slots they skipped are slots they don't
- * want. Only fully-unvoted-anywhere members keep contributing to `notVoted`
- * (and thus block-by-pending the larger-stack math).
+ * An absent vote is unknown. The availability save writes explicit ❌ votes
+ * for omitted future slots only after the user submits their complete answer.
  */
 export function tallySlots(args: TallyArgs): SlotTally[] {
   const { slots, votes, rosterIds, skipIds, fillerIds } = args;
@@ -66,10 +63,8 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
   // Map: slot -> Map<userId, VoteRow> (latest vote wins, but we only have one per (session,user,slot))
   const bySlotUser = new Map<number, Map<number, VoteRow>>();
   for (const s of slots) bySlotUser.set(s, new Map());
-  const votedAnySlot = new Set<number>();
   for (const v of votes) {
     if (!rosterIds.has(v.telegram_user_id)) continue;
-    votedAnySlot.add(v.telegram_user_id);
     const m = bySlotUser.get(v.slot_minutes);
     if (!m) continue; // out-of-range slot (shouldn't happen)
     m.set(v.telegram_user_id, v);
@@ -86,7 +81,6 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
     const noVotes: VoteRow[] = [];
     const fillerVotes: VoteRow[] = [];
     const skippedNo: number[] = [];
-    const implicitNo: number[] = [];
     for (const userId of rosterIds) {
       const v = m.get(userId);
       if (skipIds.has(userId)) {
@@ -95,14 +89,7 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
         continue;
       }
       if (!v) {
-        // No vote on this slot. If they voted anywhere else in the session,
-        // count as implicit ❌ (engaged-but-skipped-this-slot). Otherwise
-        // they're truly pending and contribute to notVoted via the
-        // rosterIds.size - cast subtraction below.
-        if (votedAnySlot.has(userId)) {
-          no += 1;
-          implicitNo.push(userId);
-        }
+        // Never infer a decline from a vote on some other start time.
         continue;
       }
       if (fillerIds.has(userId)) {
@@ -144,7 +131,6 @@ export function tallySlots(args: TallyArgs): SlotTally[] {
       noUserIds: [
         ...noVotes.map((v) => v.telegram_user_id),
         ...skippedNo,
-        ...implicitNo,
       ],
       fillerAvailableUserIds: fillerVotes.map((v) => v.telegram_user_id),
     };
