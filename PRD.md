@@ -46,7 +46,7 @@ The organizer opens tonight's session in either of two ways:
 - `/lfp` shows a start-hour picker, an end-hour picker offering later hours, and a confirmation with roster size and current enabled stacks. The picker is private to the organizer (§5.7); only the opened session is posted to the group.
 - `/lfp 18-23` opens immediately. Bounds accept `19`, `19:30` or `1930`; minutes must be :00 or :30. End `24`, `24:00` or `2400` means midnight. Optional `[5,3,2]` persists stack choices and `@mentions` add roster players in the same command.
 
-For `/lfp 12-22`, selectable candidate starts run from **12:00 through 21:30**. The end is a boundary, not another candidate start. The group message tags the roster and offers **Set my availability** plus **Can't play tonight**. The organizer submits their own response using the same flow as everyone else.
+For `/lfp 12-22`, selectable candidate starts run from **12:00 through 21:30**. The end is a boundary, not another candidate start. The group message tags the roster and offers **Set my availability** (green) plus **Can't play tonight** (red); **Remind non-voters** keeps the default button style. The organizer submits their own response using the same flow as everyone else.
 
 Only one session is active per chat. Repeating `/lfp`, `/lfp_bump` or `/lfp_show` re-posts the live message at the bottom, updates the current message ID, and tombstones the previous message. Mini App links refer to the session and continue working after a bump.
 

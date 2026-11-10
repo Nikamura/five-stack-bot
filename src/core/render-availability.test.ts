@@ -54,12 +54,12 @@ describe("v2 availability summary", () => {
   it("keeps the direct No button available with or without a configured picker", () => {
     const keyboard = renderSessionKeyboard({ sessionId: 1, miniAppUrl: "https://t.me/TestBot?startapp=s1_signed" });
     assert.deepEqual(keyboard.inline_keyboard, [[{
-      text: "📅 Set my availability", url: "https://t.me/TestBot?startapp=s1_signed",
-    }], [{ text: "🚫 Can’t play tonight", callback_data: "vbn:1" }], [{ text: "🔔 Remind non-voters", callback_data: "vr:1" }]]);
+      text: "📅 Set my availability", url: "https://t.me/TestBot?startapp=s1_signed", style: "success",
+    }], [{ text: "🚫 Can’t play tonight", callback_data: "vbn:1", style: "danger" }], [{ text: "🔔 Remind non-voters", callback_data: "vr:1" }]]);
     assert.doesNotMatch(JSON.stringify(keyboard), /web_app|vbay|vfill|"v:|"v2:/);
     assert.deepEqual(renderSessionKeyboard({ sessionId: 1 }).inline_keyboard, [[{
-      text: "📅 Set my availability", callback_data: "app:setup:1",
-    }], [{ text: "🚫 Can’t play tonight", callback_data: "vbn:1" }], [{ text: "🔔 Remind non-voters", callback_data: "vr:1" }]]);
+      text: "📅 Set my availability", callback_data: "app:setup:1", style: "success",
+    }], [{ text: "🚫 Can’t play tonight", callback_data: "vbn:1", style: "danger" }], [{ text: "🔔 Remind non-voters", callback_data: "vr:1" }]]);
   });
 
   it("tags group start times with their instant while keeping the chat-timezone label", () => {

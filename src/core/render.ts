@@ -160,7 +160,9 @@ export function renderSessionKeyboard(args: {
   const kb = new InlineKeyboard();
   if (args.miniAppUrl) kb.url("📅 Set my availability", args.miniAppUrl);
   else kb.text("📅 Set my availability", `app:setup:${args.sessionId}`);
-  kb.row().text("🚫 Can’t play tonight", `vbn:${args.sessionId}`);
+  // Bot API 9.4 button colours: green for answering, red for the one-tap decline.
+  kb.success();
+  kb.row().text("🚫 Can’t play tonight", `vbn:${args.sessionId}`).danger();
   kb.row().text("🔔 Remind non-voters", `vr:${args.sessionId}`);
   return kb;
 }
