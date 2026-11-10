@@ -18,7 +18,7 @@ const reminders = await import("./voteReminders.js");
 const jobs = await import("../scheduler/jobs.js");
 const availability = await import("./availability.js");
 await import("./callbacks.js");
-bot.botInfo = { id: 123, is_bot: true, first_name: "Test", username: "test_bot", can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false, can_connect_to_business: false, has_main_web_app: false, can_manage_bots: false, has_topics_enabled: false, allows_users_to_create_topics: false };
+bot.botInfo = { id: 123, is_bot: true, first_name: "Test", username: "test_bot", can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false, can_connect_to_business: false, has_main_web_app: false, can_manage_bots: false, has_topics_enabled: false, allows_users_to_create_topics: false, supports_join_request_queries: false };
 
 test("voting reminder lifecycle with SQLite and mocked Telegram", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-09-06T12:00:00Z") });

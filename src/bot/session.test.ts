@@ -28,7 +28,7 @@ before(() => {
   bot.botInfo = { id: 123, is_bot: true, first_name: "Test", username: "TestBot",
     can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false,
     can_connect_to_business: false, has_main_web_app: true, can_manage_bots: false,
-    has_topics_enabled: false, allows_users_to_create_topics: false };
+    has_topics_enabled: false, allows_users_to_create_topics: false, supports_join_request_queries: false };
   // Contexts clone the API client; a transformer also intercepts callback calls.
   bot.api.config.use(async (_previous, method, payload) => {
     calls.push({ method, options: payload });

@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",
-    "grammy": "^1.30.0",
+    "grammy": "^1.46.0",
     "luxon": "^3.5.0"
   },
   "devDependencies": {
