@@ -1,6 +1,53 @@
 # Mini App deployment on the homelab
 
-## Current release: completed crew match results
+## Current release: private flows, tagged times and button styles
+
+Deployed **2026-11-10 at 15:18:51 UTC** from application commit `bc15e09`
+(grammY 1.46.0, Bot API 10.3 types). Personal and administrative flows use
+ephemeral messages, group start times carry format-less `date_time` entities,
+the answer buttons are coloured, and the Mini App received a polish pass. The
+database schema is unchanged.
+
+- Bot image: `five-stack-bot:ephemeral-bc15e09`, also `latest`
+  (`sha256:ee9a68bd34487614e01b65650f830397c86de95cc7d3e0ff9d06851d174cc840`).
+- Rollback image: `five-stack-bot:pre-ephemeral-20261110T151434Z`.
+- Private backup directory: `/opt/stacks/bots/backups/five-stack-ephemeral-20261110T151434Z`,
+  with a consistent database backup, Compose copy, source bundle, previous
+  image and container identities and the build log. A second database copy is
+  at `/app/data/pre-ephemeral-20261110T151434Z.db` in the persistent volume.
+
+Before cutover: 207 tests, typecheck and build passed, and no session was
+active. After cutover: HTTPS health 200; unauthenticated session API 401; served
+`app.js` and `styles.css` match the release, and `index.html` differs only by
+the proxy's analytics script; SQLite quick_check OK; Telegram polling online
+with zero restarts. Telegram accepted the group-scope command list, and
+`getMyCommands` returns `is_ephemeral` for `/lfp`, `/lfp_roster`, `/lfp_tz`,
+`/lfp_stacks`, `/lfp_stats`, the three link commands and `/help`. Only
+`five-stack-bot` was recreated. No test Telegram message was sent.
+
+Still to check in the real group, since none of it can be exercised without a
+member's client:
+
+- An ephemeral `/lfp` opens a private wizard, and `/lfp 18-23 @a @b` still adds
+  the tagged players. If mentions are lost, remove `personal: true` from the
+  `lfp` entry in `src/index.ts`.
+- Picker buttons edit and close an ephemeral message; a private timezone or
+  stacks change is announced publicly.
+- Explanatory button presses (a non-roster decline, a retired voting button)
+  arrive as a private message rather than a toast.
+- Start times render as tappable times that show the viewer's local time, with
+  the chat-timezone text unchanged, including inside bold.
+- The green and red styles show on both the URL and callback buttons.
+
+To roll back, retag the pre-ephemeral image as `latest` and recreate only this
+service with `docker compose up -d --no-deps`. Keep the current database. The
+older bot leaves the ephemeral command flags in Telegram until it next calls
+`setMyCommands` at startup, which it does without them for the default scope
+only; delete the group-scope list (`deleteMyCommands` with scope
+`all_group_chats`) so commands become visible again. Prevent the source updater
+from rebuilding the newer release during rollback.
+
+## Previous release: completed crew match results
 
 Deployed **2026-09-06 at 14:15:40 UTC** from application commit `a7a386b`.
 Tracker commit `6a716b8` was deployed first at 14:15:02 UTC to provide the
