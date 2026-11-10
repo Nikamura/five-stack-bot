@@ -352,7 +352,7 @@ function renderReminder() {
   const availableAt = demoMode ? state.demoReminderAvailableAt : state.snapshot.reminderAvailableAt || 0;
   const minutes = Math.max(0, Math.ceil((availableAt - now()) / 60_000));
   $('remind-non-voters').disabled = state.reminding || state.fatal || minutes > 0;
-  $('remind-non-voters').textContent = state.reminding ? 'Sending reminder…' : '🔔 Remind non-voters';
+  $('remind-non-voters').textContent = state.reminding ? 'Sending reminder…' : 'Remind non-voters';
   $('reminder-hint').textContent = minutes > 0 ? `Remind again in ${minutes} min.` : `Nudge ${pending} ${pending === 1 ? 'person who hasn’t' : 'people who haven’t'} answered in the group chat.`;
 }
 
@@ -392,7 +392,7 @@ function renderLineups() {
     const heading = el('div', 'lineup-heading');
     heading.append(el('h4', 'lineup-time', times));
     const total = group.yes.length + group.maybe.length + group.filler.length;
-    heading.append(el('span', 'caption', `${total} available`));
+    heading.append(el('span', 'caption', total ? `${total} available` : 'No one available yet'));
     row.append(heading);
     for (const [label, ids, className] of [['In', group.yes, 'yes'], ['Maybe', group.maybe, 'maybe'], ['If needed', group.filler, 'muted'], ['Waiting', group.waiting, 'muted']]) {
       if (!ids.length) continue;
@@ -400,7 +400,6 @@ function renderLineups() {
       answer.append(el('span', 'lineup-label', label), el('span', '', playerNames(ids)));
       row.append(answer);
     }
-    if (!total) row.append(el('p', 'caption', 'No one available yet.'));
     if (group.no) row.append(el('p', 'lineup-unavailable caption', `${group.no} unavailable`));
     lineups.append(row);
   }
