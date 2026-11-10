@@ -14,9 +14,23 @@ import { COMMON_TZS } from "./time.js";
 // Session message
 // ============================================================================
 
-function startTimeRange(startMinutes: number, endMinutes: number): string {
+/** Renders one candidate start. Group messages pass a formatter that adds a date_time entity. */
+export type SlotFormatter = (slotMinutes: number) => string;
+
+/**
+ * Marks a chat-timezone time as a Bot API 9.5 `date_time` entity without a
+ * format string. Telegram then shows `label` exactly as written and offers the
+ * viewer their own local time on tap. The displayed time deliberately stays in
+ * the chat timezone: the picker, commands and saved answers all use it, so a
+ * per-viewer conversion would show two different clocks for the same start.
+ */
+export function timeEntity(label: string, unixSeconds: number): string {
+  return `<tg-time unix="${unixSeconds}">${label}</tg-time>`;
+}
+
+function startTimeRange(startMinutes: number, endMinutes: number, time: SlotFormatter = formatSlot): string {
   const lastStart = endMinutes - 30;
-  return startMinutes === lastStart ? formatSlot(startMinutes) : `${formatSlot(startMinutes)}–${formatSlot(lastStart)}`;
+  return startMinutes === lastStart ? time(startMinutes) : `${time(startMinutes)}–${time(lastStart)}`;
 }
 
 export function renderSessionBody(args: {
@@ -30,7 +44,9 @@ export function renderSessionBody(args: {
   totalSlots: number;
   spectatorCount: number;
   parties?: PartyWindow[];
+  time?: SlotFormatter;
 }): string {
+  const time = args.time ?? formatSlot;
   const {
     session,
     roster,
@@ -43,7 +59,7 @@ export function renderSessionBody(args: {
     spectatorCount,
   } = args;
   const opener = escapeHtml(session.opener_display_name);
-  const range = startTimeRange(session.start_minutes, session.end_minutes);
+  const range = startTimeRange(session.start_minutes, session.end_minutes, time);
   const rosterStr = roster.length === 0 ? "<i>(empty)</i>" : mentionList(roster);
   const responded = new Set(tallies.flatMap((t) => [
     ...t.yesUserIds, ...t.maybeUserIds, ...t.noUserIds, ...t.fillerAvailableUserIds,
@@ -55,11 +71,11 @@ export function renderSessionBody(args: {
     "",
   ];
   if (lock?.slot !== null && lock?.slot !== undefined) {
-    lines.push(`🔒 <b>${lock.size}-stack at ${formatSlot(lock.slot)}</b>`);
+    lines.push(`🔒 <b>${lock.size}-stack at ${time(lock.slot)}</b>`);
   } else {
     lines.push("Waiting for enough overlapping availability.");
   }
-  if (args.parties?.length) lines.push(...renderPartyWindows(args.parties, roster));
+  if (args.parties?.length) lines.push(...renderPartyWindows(args.parties, roster, time));
   lines.push(`Saved replies: <b>${responded.size}/${roster.length}</b>`, "");
   lines.push(...voterSummary({ roster, tallies, skipIds, fillerIds, totalSlots }));
   const pending = roster.filter((m) => !responded.has(m.telegram_user_id));
@@ -190,7 +206,9 @@ export function renderGameOn(args: {
   /** The next-larger enabled stack (e.g. 5 when locked at 4). */
   upgradeTarget?: number | null;
   parties?: PartyWindow[];
+  time?: SlotFormatter;
 }): string {
+  const time = args.time ?? formatSlot;
   const map = new Map(args.roster.map((m) => [m.telegram_user_id, m]));
   const coreStr = mentionByIdsWithLate(
     args.roster,
@@ -205,7 +223,7 @@ export function renderGameOn(args: {
     .filter(Boolean)
     .join(" ");
   const lines = [
-    `🔒 <b>GAME ON ${formatSlot(args.slot)}</b> — ${args.size}-stack`,
+    `🔒 <b>GAME ON ${time(args.slot)}</b> — ${args.size}-stack`,
     coreStr,
   ];
   if (altStr.length > 0) {
@@ -236,20 +254,20 @@ export function renderGameOn(args: {
     if (mentions) {
       lines.push(
         "",
-        `🔔 ${mentions} — save your availability for ${formatSlot(args.slot)} to upgrade to a ${args.upgradeTarget}-stack.`,
+        `🔔 ${mentions} — save your availability for ${time(args.slot)} to upgrade to a ${args.upgradeTarget}-stack.`,
       );
     }
   }
-  if (args.parties?.length) lines.push("", ...renderPartyWindows(args.parties, args.roster));
+  if (args.parties?.length) lines.push("", ...renderPartyWindows(args.parties, args.roster, time));
   return lines.join("\n");
 }
 
 /** Compact independent windows. Exact saved-start ranges avoid implying play duration. */
-export function renderPartyWindows(parties: PartyWindow[], roster: RosterMember[]): string[] {
+export function renderPartyWindows(parties: PartyWindow[], roster: RosterMember[], time: SlotFormatter = formatSlot): string[] {
   const names = new Map(roster.map(m => [m.telegram_user_id, escapeHtml(m.display_name)]));
   const lines = ["<b>Playable parties · start options</b>"];
   for (const party of parties.slice(0, 4)) {
-    const range = startTimeRange(party.slot, party.endSlot);
+    const range = startTimeRange(party.slot, party.endSlot, time);
     const players = party.core.map(id => `${names.get(id) ?? "Player"}${party.fillerIds.includes(id) ? " (if needed)" : party.maybeIds.includes(id) ? " (maybe)" : ""}`).join(", ");
     lines.push(`${range} · <b>${party.size}-stack</b> — ${players}`);
   }

@@ -81,6 +81,10 @@ SSE polls authorized snapshots about once per second, ignores server-clock-only 
 
 POST requires the configured same origin and bounded JSON. Static files use an exact allowlist; add any new frontend module there. Retain Telegram-compatible CSP (including the Telegram SDK and web-client frame ancestors). Demo mode stays isolated and cannot bypass API authentication.
 
+## Times in group messages
+
+The chat timezone (`/lfp_tz`) is the single clock for candidate starts, the picker and every displayed time. `session.ts` passes `slotTime(session)` to the renderers so group start times carry a `date_time` entity (`<tg-time unix="…">HH:MM</tg-time>`) with **no** `format` attribute: Telegram shows the chat-timezone label as written and offers the viewer's local time on tap. Do not add a format string; it would replace the label with a per-viewer conversion that disagrees with the Mini App grid and `/lfp` arguments. Per-player availability ranges and private pickers stay plain text.
+
 ## Schema and code conventions
 
 - Use transactions for migrations and multi-row saves. Make migrations safe to rerun and test interrupted/legacy states where relevant.

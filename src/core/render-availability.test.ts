@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { renderSessionBody, renderSessionKeyboard, wizardStep2Text, wizardStep3Text } from "./render.js";
+import { renderGameOn, renderSessionBody, renderSessionKeyboard, timeEntity, wizardStep2Text, wizardStep3Text } from "./render.js";
 import { tallySlots } from "./lock.js";
 import type { RosterMember, SessionRow, VoteRow } from "../db/types.js";
 
@@ -60,6 +60,23 @@ describe("v2 availability summary", () => {
     assert.deepEqual(renderSessionKeyboard({ sessionId: 1 }).inline_keyboard, [[{
       text: "📅 Set my availability", callback_data: "app:setup:1",
     }], [{ text: "🚫 Can’t play tonight", callback_data: "vbn:1" }], [{ text: "🔔 Remind non-voters", callback_data: "vr:1" }]]);
+  });
+
+  it("tags group start times with their instant while keeping the chat-timezone label", () => {
+    const time = (slot: number) => timeEntity(`${Math.floor(slot / 60)}:${String(slot % 60).padStart(2, "0")}`, 1_000_000 + slot * 60);
+    const output = renderSessionBody({
+      session, roster, tallies: [], lock: { slot: 780, size: 2, core: [1, 2], alternates: [] }, validStacks: [5, 3, 2],
+      skipIds: new Set(), fillerIds: new Set(), totalSlots: 4, spectatorCount: 0, time,
+      parties: [{ slot: 780, endSlot: 840, size: 2, core: [1, 2], alternates: [], maybeIds: [], fillerIds: [] }],
+    });
+    assert.match(output, /Start times: <b><tg-time unix="1043200">12:00<\/tg-time>–<tg-time unix="1048600">13:30<\/tg-time><\/b>/);
+    assert.match(output, /2-stack at <tg-time unix="1046800">13:00<\/tg-time><\/b>/);
+    assert.match(output, /<tg-time unix="1046800">13:00<\/tg-time>–<tg-time unix="1048600">13:30<\/tg-time> · <b>2-stack/);
+    // No format string: Telegram shows the label as written, never a converted clock.
+    assert.doesNotMatch(output, /format=/);
+    const gameOn = renderGameOn({ slot: 780, size: 2, coreIds: [1, 2], alternateIds: [], roster, time });
+    assert.match(gameOn, /GAME ON <tg-time unix="1046800">13:00<\/tg-time><\/b>/);
+    assert.match(renderGameOn({ slot: 780, size: 2, coreIds: [1, 2], alternateIds: [], roster }), /GAME ON 13:00<\/b>/);
   });
 
   it("explains the excluded setup endpoint and confirms the actual possible starts", () => {

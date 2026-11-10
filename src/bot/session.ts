@@ -24,6 +24,8 @@ import {
   renderSessionBody,
   renderSessionKeyboard,
   renderT15,
+  timeEntity,
+  type SlotFormatter,
 } from "../core/render.js";
 import { mentionByIds, mentionByIdsWithLate } from "../core/mention.js";
 import { computeArchiveAt, slotInstantMs } from "../core/time.js";
@@ -320,7 +322,7 @@ export async function archiveSessionFromScheduler(sessionId: number): Promise<vo
     if (session.poll_message_id) {
       const lock = q.getLock(sessionId);
       const tail = lock
-        ? `\n\n— archived. Final lock: ${lock.size}-stack at ${formatSlotMm(lock.slot_minutes)}.`
+        ? `\n\n— archived. Final lock: ${lock.size}-stack at ${slotTime(session)(lock.slot_minutes)}.`
         : "\n\n— archived. No party formed.";
       const { body } = renderSessionMessage(session, { archivedSuffix: tail });
       await safeEditMessage({
@@ -375,6 +377,7 @@ function renderSessionMessage(
     totalSlots: slots.length,
     spectatorCount: spectatorIds.size,
     parties: q.getPartyPlan(session.id),
+    time: slotTime(session),
   });
   if (opts?.archivedSuffix) body += opts.archivedSuffix;
   // Both group actions resolve the session by ID; saves validate future times.
@@ -536,7 +539,7 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
   }
   if (planChanged && previousPlan.length && (diff.kind === "unchanged" || diff.kind === "alternates-changed")) {
     const upcoming = plan.filter(p => slotInstantMs({ slotMinutes: p.endSlot - 30, tz: chat.tz, nowMs: session.opened_at }) > Date.now());
-    const text = upcoming.length ? renderPartyWindows(upcoming, roster).join("\n") : "No later parties currently have enough saved availability.";
+    const text = upcoming.length ? renderPartyWindows(upcoming, roster, slotTime(session)).join("\n") : "No later parties currently have enough saved availability.";
     await bot.api.sendMessage(session.chat_id, `📅 <b>Party plan updated</b>\n${text}`, { parse_mode: "HTML" });
   }
   const maybePrompts: string[] = [];
@@ -544,7 +547,7 @@ async function evaluateAndApply(session: SessionRow): Promise<void> {
     if (slotInstantMs({ slotMinutes:party.slot,tz:chat.tz,nowMs:session.opened_at }) <= Date.now()) continue;
     const previous = previousPlan.find(p => p.slot <= party.slot && p.endSlot > party.slot);
     const newlySeated = party.maybeIds.filter(id => !previous?.maybeIds.includes(id));
-    if (newlySeated.length) maybePrompts.push(`🤷 ${mentionByIds(roster,newlySeated)} — for the ${formatSlotMm(party.slot)} party, open your availability and Save Yes to confirm.`);
+    if (newlySeated.length) maybePrompts.push(`🤷 ${mentionByIds(roster,newlySeated)} — for the ${slotTime(session)(party.slot)} party, open your availability and Save Yes to confirm.`);
   }
   if (maybePrompts.length) await bot.api.sendMessage(session.chat_id,maybePrompts.join("\n"),{parse_mode:"HTML"});
   q.saveNotifiedPartyPlan(session.id, plan);
@@ -588,6 +591,7 @@ async function postGameOn(args: {
     roster: args.roster,
     lateByUserId,
     parties: q.getPartyPlan(args.session.id),
+    time: slotTime(args.session),
     availableAtSlot: args.availableAtSlot,
     unvotedIds: args.unvotedIds,
     upgradeTarget: args.upgradeTarget,
@@ -648,6 +652,7 @@ async function editGameOn(args: {
     roster: args.roster,
     lateByUserId,
     parties: q.getPartyPlan(args.session.id),
+    time: slotTime(args.session),
     availableAtSlot: args.availableAtSlot,
     unvotedIds: args.unvotedIds,
     upgradeTarget: args.upgradeTarget,
@@ -720,6 +725,7 @@ export async function refreshGameOnMessage(sessionId: number): Promise<void> {
       roster,
       lateByUserId,
       parties: q.getPartyPlan(sessionId),
+      time: slotTime(session),
       availableAtSlot,
       unvotedIds,
       upgradeTarget,
@@ -739,6 +745,7 @@ async function postChangedFollowup(args: {
   next: LockResult;
   roster: RosterMember[];
 }): Promise<void> {
+  const time = slotTime(args.session);
   const prevCoreSet = new Set(args.prev.core);
   const nextCoreSet = new Set(args.next.core);
   const dropped = args.prev.core.filter((u) => !nextCoreSet.has(u));
@@ -750,12 +757,12 @@ async function postChangedFollowup(args: {
     parts.push(`${args.prev.size}-stack → ${args.next.size}-stack`);
   }
   if (args.prev.slot !== args.next.slot) {
-    parts.push(`${formatSlotMm(args.prev.slot!)} → ${formatSlotMm(args.next.slot!)}`);
+    parts.push(`${time(args.prev.slot!)} → ${time(args.next.slot!)}`);
   }
   const headline = parts.join(" · ") || "lineup updated";
   const stillCore = mentionByIds(args.roster, args.next.core);
   const text = renderPartyChanged(
-    `${headline}.\n🔒 Still GAME ON ${formatSlotMm(args.next.slot!)} — ${args.next.size}-stack: ${stillCore}`,
+    `${headline}.\n🔒 Still GAME ON ${time(args.next.slot!)} — ${args.next.size}-stack: ${stillCore}`,
   );
   await bot.api.sendMessage(args.session.chat_id, text, {
     parse_mode: "HTML",
@@ -802,7 +809,7 @@ async function firePartyT15Locked(session: SessionRow, slot: number): Promise<vo
     const roster = q.getRoster(session.chat_id);
     const conditional = party.maybeIds.length || party.fillerIds.length ? " (includes maybe / if-needed players)" : "";
     await bot.api.sendMessage(session.chat_id,
-      `⏰ ${formatSlotMm(slot)} — ${party.size}-stack${conditional}\n${mentionByIds(roster, party.core)}`, { parse_mode: "HTML" });
+      `⏰ ${slotTime(session)(slot)} — ${party.size}-stack${conditional}\n${mentionByIds(roster, party.core)}`, { parse_mode: "HTML" });
   }
 }
 export async function firePartyT15(sessionId: number, slot: number): Promise<void> {
@@ -875,6 +882,18 @@ export async function fireT15(sessionId: number): Promise<void> {
 }
 
 // ----------------------------------------------------------------------------
+
+/**
+ * Group-message time formatter: the chat-timezone label, tagged with the
+ * start's absolute instant so each viewer can check it in their own timezone.
+ */
+function slotTime(session: SessionRow): SlotFormatter {
+  const tz = q.getOrCreateChat(session.chat_id).tz;
+  return (slot) => timeEntity(
+    formatSlotMm(slot),
+    Math.floor(slotInstantMs({ slotMinutes: slot, tz, nowMs: session.opened_at }) / 1000),
+  );
+}
 
 function formatSlotMm(slotMinutes: number): string {
   const h = Math.floor(slotMinutes / 60);

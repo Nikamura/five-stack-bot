@@ -125,7 +125,7 @@ Before the first start, time, size or core-lineup changes edit GAME ON and post 
 
 `/lfp_stats` shows session counts over 30/90 days and 90-day player join rates, common locked start and common stack size. Data comes from local session, vote and lock records.
 
-`/lfp_tz` accepts a typed IANA timezone or a quick picker for Europe/Vilnius, Europe/Berlin, Europe/London, Europe/Helsinki and UTC, with an Other option. Default: Europe/Vilnius. The timezone determines tonight's date, candidate starts, archive cutoff and reminders.
+`/lfp_tz` accepts a typed IANA timezone or a quick picker for Europe/Vilnius, Europe/Berlin, Europe/London, Europe/Helsinki and UTC, with an Other option. Default: Europe/Vilnius. The timezone determines tonight's date, candidate starts, archive cutoff and reminders. Every time the bot shows is written in the chat timezone, in group messages and the Mini App alike. Start times in the session message, GAME ON, plan updates, change notices and later-window reminders are also tagged as Telegram date-time entities with no display format: the text stays the chat-timezone time, and a member elsewhere can tap it to see their local equivalent. Group messages do not convert times per viewer, because the picker, commands and saved answers use the chat timezone and the two would disagree.
 
 `/lfp_stacks` toggles sizes 5/4/3/2 with Save/Cancel. Default 5/3/2 leaves 4 disabled; this is configuration, not a hardcoded exclusion. `/help` and `/lfp_help` list commands.
 

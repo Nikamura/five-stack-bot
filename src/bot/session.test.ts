@@ -23,6 +23,7 @@ let clockNow = now;
 let sessionId = 0;
 let nextMessage = 100;
 const calls: Array<{ method: string; text?: string; options?: any }> = [];
+const withoutTimeTags = (text: string) => text.replace(/<\/?tg-time[^>]*>/g, "");
 // Telegram refuses ephemeral sends outside the 15-second window unless the bot is an admin.
 let refuseEphemeral = false;
 
@@ -273,7 +274,11 @@ describe("v2 session integration", () => {
     assert.equal(q.getLock(sessionId)!.slot_minutes,780);
     assert.equal(q.getLock(sessionId)!.size,3);
     assert.deepEqual(q.getPartyPlan(sessionId).map(p => [p.slot,p.size]),[[780,3],[840,4],[900,5]]);
-    const edit = calls.find(c => c.method === "editMessageText")!.text!;
+    const tagged = calls.find(c => c.method === "editMessageText")!.text!;
+    // Each start keeps its chat-timezone label and carries its absolute instant.
+    assert.ok(tagged.includes(`<tg-time unix="${Date.parse("2026-09-06T13:00:00Z") / 1000}">13:00</tg-time>–<tg-time unix="${Date.parse("2026-09-06T13:30:00Z") / 1000}">13:30</tg-time>`));
+    assert.doesNotMatch(tagged, /<tg-time[^>]*format=/);
+    const edit = withoutTimeTags(tagged);
     assert.match(edit,/13:00–13:30.*3-stack/);
     assert.match(edit,/14:00–14:30.*4-stack/);
     assert.match(edit,/15:00–15:30.*5-stack/);
@@ -393,7 +398,7 @@ describe("v2 session integration", () => {
     await sessions.refreshActiveSession(1);
     const prompts = () => calls.filter(c=>c.method==="sendMessage" && c.text?.startsWith("🤷"));
     assert.equal(prompts().length,1);
-    assert.match(prompts()[0]!.text!,/@player4.*14:00 party/);
+    assert.match(withoutTimeTags(prompts()[0]!.text!),/@player4.*14:00 party/);
     await sessions.refreshActiveSession(1);
     assert.equal(prompts().length,1);
     clockNow=Date.parse("2026-09-06T13:01:00Z");
