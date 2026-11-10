@@ -17,7 +17,7 @@ Session bounds are start-inclusive and end-exclusive: `/lfp 12-22` offers 12:00 
 Use **Node.js 22 or newer**.
 
 1. Create a bot with [@BotFather](https://t.me/BotFather), or use the existing bot's token.
-2. Disable Group Privacy if the bot must discover usernames from normal group messages. Add it to the group. Optional **Pin messages** and **Delete messages** admin rights enable pinning and command cleanup; other features do not require admin rights.
+2. Disable Group Privacy if the bot must discover usernames from normal group messages. Add it to the group. Optional **Pin messages** and **Delete messages** admin rights enable pinning and command cleanup; other features do not require admin rights. As an admin, the bot can also keep pickers and personal replies private (ephemeral) for visible commands; otherwise those fall back to public replies.
 3. Configure and install:
 
 ```bash

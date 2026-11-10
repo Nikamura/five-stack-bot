@@ -12,6 +12,28 @@ import { startMatchResults } from "./bot/matchResults.js";
 
 setLogLevel(config.logLevel);
 
+/**
+ * `personal` commands only answer their sender. Commands that act on the
+ * shared session or roster stay visible, as do /lfp and /lfp_add, which
+ * depend on @mentions and replies to another member's message.
+ */
+const BOT_COMMANDS: { command: string; description: string; personal?: true }[] = [
+  { command: "lfp", description: "Open a session for tonight" },
+  { command: "lfp_bump", description: "Re-post the poll at the bottom" },
+  { command: "lfp_cancel", description: "Cancel the active session" },
+  { command: "lfp_roster", description: "Show & manage the roster", personal: true },
+  { command: "lfp_add", description: "Add a player to the roster" },
+  { command: "lfp_remove", description: "Remove a player from the roster" },
+  { command: "lfp_skip", description: "Mark a roster member as no-show for tonight" },
+  { command: "lfp_tz", description: "Set the chat timezone", personal: true },
+  { command: "lfp_stacks", description: "Toggle valid party sizes", personal: true },
+  { command: "lfp_link", description: "Link a roster member: [Telegram ID] Name#TAG platform", personal: true },
+  { command: "lfp_link_bulk", description: "Link multiple roster members, one mapping per line", personal: true },
+  { command: "lfp_unlink", description: "Remove a Riot account link: [Telegram ID]", personal: true },
+  { command: "lfp_stats", description: "Show chat stats", personal: true },
+  { command: "help", description: "Help", personal: true },
+];
+
 bot.catch((err) => {
   log.error("bot error", err);
 });
@@ -43,22 +65,15 @@ async function main() {
   await refreshAllActiveSessions();
 
   // Set the bot command menu so Telegram users see it in the / picker.
-  await bot.api.setMyCommands([
-    { command: "lfp", description: "Open a session for tonight" },
-    { command: "lfp_bump", description: "Re-post the poll at the bottom" },
-    { command: "lfp_cancel", description: "Cancel the active session" },
-    { command: "lfp_roster", description: "Show & manage the roster" },
-    { command: "lfp_add", description: "Add a player to the roster" },
-    { command: "lfp_remove", description: "Remove a player from the roster" },
-    { command: "lfp_skip", description: "Mark a roster member as no-show for tonight" },
-    { command: "lfp_tz", description: "Set the chat timezone" },
-    { command: "lfp_stacks", description: "Toggle valid party sizes" },
-    { command: "lfp_link", description: "Link a roster member: [Telegram ID] Name#TAG platform" },
-    { command: "lfp_link_bulk", description: "Link multiple roster members, one mapping per line" },
-    { command: "lfp_unlink", description: "Remove a Riot account link: [Telegram ID]" },
-    { command: "lfp_stats", description: "Show chat stats" },
-    { command: "help", description: "Help" },
-  ]);
+  await bot.api.setMyCommands(BOT_COMMANDS.map(({ command, description }) => ({ command, description })));
+  // In groups, personal and administrative commands are sent ephemerally:
+  // only the sender and the bot see the command and its reply (Bot API 10.2).
+  await bot.api.setMyCommands(
+    BOT_COMMANDS.map(({ command, description, personal }) => ({
+      command, description, ...(personal ? { is_ephemeral: true } : {}),
+    })),
+    { scope: { type: "all_group_chats" } },
+  );
 
   const stopMatchResults = startMatchResults();
 

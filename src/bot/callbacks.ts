@@ -1,5 +1,13 @@
 import { bot } from "./instance.js";
-import { senderDisplayName } from "./util.js";
+import {
+  deleteFlowMessage,
+  editFlowMarkup,
+  editFlowMessage,
+  finishFlow,
+  privateNotice,
+  privateReply,
+  senderDisplayName,
+} from "./util.js";
 import * as q from "../db/queries.js";
 import * as session from "./session.js";
 import {
@@ -23,6 +31,7 @@ import {
 } from "../core/render.js";
 import { setPending } from "./wizardState.js";
 import { COMMON_TZS } from "../core/time.js";
+import { escapeHtml } from "../core/mention.js";
 import { log } from "../log.js";
 import { renderSessionKeyboard } from "../core/render.js";
 import { declineAvailability } from "./availability.js";
@@ -36,14 +45,14 @@ import { sendVoteReminder } from "./voteReminders.js";
 bot.callbackQuery(/^lfp:start:(\d+)$/, async (ctx) => {
   const startMinutes = Number(ctx.match[1]);
   ctx.answerCallbackQuery().catch(() => {});
-  await ctx.editMessageText(wizardStep2Text(startMinutes), {
+  await editFlowMessage(ctx, wizardStep2Text(startMinutes), {
     reply_markup: wizardStep2Keyboard(startMinutes),
   });
 });
 
 bot.callbackQuery(/^lfp:back:start$/, async (ctx) => {
   ctx.answerCallbackQuery().catch(() => {});
-  await ctx.editMessageText(wizardStep1Text(), { reply_markup: wizardStep1Keyboard() });
+  await editFlowMessage(ctx, wizardStep1Text(), { reply_markup: wizardStep1Keyboard() });
 });
 
 bot.callbackQuery(/^lfp:end:(\d+):(\d+)$/, async (ctx) => {
@@ -54,7 +63,8 @@ bot.callbackQuery(/^lfp:end:(\d+):(\d+)$/, async (ctx) => {
   const chat = q.getOrCreateChat(ctx.chat.id);
   const stacks = q.parseStacks(chat.valid_stacks);
   const rosterSize = q.getRoster(ctx.chat.id).length;
-  await ctx.editMessageText(
+  await editFlowMessage(
+    ctx,
     wizardStep3Text({ startMinutes, endMinutes, validStacks: stacks, rosterSize }),
     { reply_markup: wizardStep3Keyboard(startMinutes, endMinutes) },
   );
@@ -66,7 +76,8 @@ bot.callbackQuery(/^lfp:open:(\d+):(\d+)$/, async (ctx) => {
   const endMinutes = Number(ctx.match[2]);
   ctx.answerCallbackQuery({ text: "Opening…" }).catch(() => {});
   try {
-    await ctx.editMessageText(wizardOpenedText());
+    // A private picker just disappears; the session message is the result.
+    await finishFlow(ctx, wizardOpenedText());
   } catch (e) {
     log.warn("could not edit wizard msg", e);
   }
@@ -79,14 +90,14 @@ bot.callbackQuery(/^lfp:open:(\d+):(\d+)$/, async (ctx) => {
     endMinutes,
   });
   if (typeof result === "object") {
-    await ctx.reply("A session is already active.");
+    await privateReply(ctx, "A session is already active.");
   }
 });
 
 bot.callbackQuery(/^lfp:wcancel$/, async (ctx) => {
   ctx.answerCallbackQuery().catch(() => {});
   try {
-    await ctx.editMessageText(wizardCancelledText());
+    await finishFlow(ctx, wizardCancelledText());
   } catch {
     /* ignore */
   }
@@ -104,7 +115,7 @@ bot.callbackQuery(/^vr:(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text });
   } catch (error) {
     log.warn("Voting reminder failed", error);
-    await ctx.answerCallbackQuery({ text: "Couldn't post the reminder. Please try again." }).catch(() => {});
+    await privateNotice(ctx, "Couldn't post the reminder. Please try again.").catch(() => {});
   }
 });
 
@@ -113,15 +124,15 @@ bot.callbackQuery(/^(?:v|v2|vbay|vfill):(\d+)(?::\d+)?$/, async (ctx) => {
   const sessionId = Number(ctx.match[1]);
   const active = q.getSession(sessionId);
   if (!active || active.archived_at !== null || active.archive_at <= Date.now()) {
-    await ctx.answerCallbackQuery({ text: "Voting has ended for this session." });
+    await privateNotice(ctx, "Voting has ended for this session.");
     return;
   }
-  await ctx.answerCallbackQuery({ text: "Voting moved to the availability picker. Open it below, then Save." });
   try {
     await ctx.editMessageReplyMarkup({ reply_markup: renderSessionKeyboard({
       sessionId, miniAppUrl: session.getSessionMiniAppLink(sessionId),
     }) });
   } catch (error) { log.warn("Could not upgrade an old voting keyboard", error); }
+  await privateNotice(ctx, "Voting moved to the availability picker. Tap Set my availability on the session message, choose your times, then Save.");
 });
 
 // This complete answer remains available directly in the group, including v1 No buttons.
@@ -133,29 +144,29 @@ bot.callbackQuery(/^vbn:(\d+)$/, async (ctx) => {
       ? error.status === 403 ? "Only this group's roster can answer. Ask to be added with /lfp_add." : error.message
       : "Could not save your reply. Please try again.";
     if (!(error instanceof ApiError)) log.warn("Direct availability decline failed", error);
-    await ctx.answerCallbackQuery({ text, show_alert: true });
+    await privateNotice(ctx, text, true);
     return;
   }
   await ctx.answerCallbackQuery({ text: "Saved: you can't play at any remaining start time tonight." });
 });
 
 bot.callbackQuery(/^app:setup:(\d+)$/, async (ctx) => {
-  await ctx.answerCallbackQuery({
-    text: "The availability app is not configured yet. Ask the bot owner to finish Mini App setup.",
-    show_alert: true,
-  });
+  await privateNotice(
+    ctx,
+    "The availability app is not configured yet. Ask the bot owner to finish Mini App setup.",
+    true,
+  );
 });
 
 bot.callbackQuery(/^xs:(\d+)$/, async (ctx) => {
   const sessionId = Number(ctx.match[1]);
-  await ctx.answerCallbackQuery();
-  // Show confirm
   const s = q.getSession(sessionId);
   if (!s || s.archived_at !== null) {
-    await ctx.reply("That session is no longer active.");
+    await privateNotice(ctx, "That session is no longer active.");
     return;
   }
-  await ctx.reply("Cancel the active session?", {
+  // Confirm privately, before answering: the query authorizes the private reply.
+  await privateReply(ctx, "Cancel the active session?", {
     reply_markup: {
       inline_keyboard: [[
         { text: "🗑 Cancel session", callback_data: `xs!:${sessionId}` },
@@ -163,12 +174,13 @@ bot.callbackQuery(/^xs:(\d+)$/, async (ctx) => {
       ]],
     },
   });
+  await ctx.answerCallbackQuery().catch(() => {});
 });
 
 bot.callbackQuery(/^xs:keep$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   try {
-    await ctx.deleteMessage();
+    await deleteFlowMessage(ctx);
   } catch {
     /* ignore */
   }
@@ -179,7 +191,8 @@ bot.callbackQuery(/^xs!:(\d+)$/, async (ctx) => {
   ctx.answerCallbackQuery({ text: "Cancelling…" }).catch(() => {});
   await session.cancelSession(sessionId);
   try {
-    await ctx.editMessageText(cancelDoneText(), { reply_markup: { inline_keyboard: [] } });
+    // The tombstoned session message already tells the group.
+    await finishFlow(ctx, cancelDoneText());
   } catch {
     /* ignore */
   }
@@ -209,7 +222,7 @@ bot.callbackQuery(/^late:(\d+)$/, async (ctx) => {
     (p) => p.role === "core" && p.telegram_user_id === ctx.from!.id,
   );
   if (!isCore) {
-    await ctx.answerCallbackQuery({ text: "Only locked players can flag late." });
+    await privateNotice(ctx, "Only locked players can flag late.");
     return;
   }
   const existing = q.getLockLateForUser(sessionId, ctx.from.id);
@@ -239,21 +252,24 @@ bot.callbackQuery(/^r:rm:(-?\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: "Already removed." });
     return;
   }
-  await ctx.answerCallbackQuery();
-  await ctx.reply(rosterRemoveConfirmText(m), {
+  await privateReply(ctx, rosterRemoveConfirmText(m), {
     parse_mode: "HTML",
     reply_markup: rosterRemoveConfirmKeyboard(userId),
   });
+  await ctx.answerCallbackQuery().catch(() => {});
 });
 
 bot.callbackQuery(/^r:rm!:(-?\d+)$/, async (ctx) => {
   if (!ctx.chat) return ctx.answerCallbackQuery();
   const userId = Number(ctx.match[1]);
   ctx.answerCallbackQuery({ text: "Removed." }).catch(() => {});
+  const m = q.getRosterMember(ctx.chat.id, userId);
   q.removeRosterMember(ctx.chat.id, userId);
   await session.refreshActiveSession(ctx.chat.id);
+  const name = m ? (m.username ? `@${m.username}` : escapeHtml(m.display_name)) : null;
   try {
-    await ctx.editMessageText("Removed.", { reply_markup: { inline_keyboard: [] } });
+    // The roster is shared, so a removal confirmed privately is still announced.
+    await finishFlow(ctx, name ? `Removed ${name}.` : "Removed.", name ? "transient" : "none");
   } catch {
     /* ignore */
   }
@@ -262,7 +278,7 @@ bot.callbackQuery(/^r:rm!:(-?\d+)$/, async (ctx) => {
 bot.callbackQuery(/^r:cancel$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   try {
-    await ctx.deleteMessage();
+    await deleteFlowMessage(ctx);
   } catch {
     /* ignore */
   }
@@ -271,8 +287,8 @@ bot.callbackQuery(/^r:cancel$/, async (ctx) => {
 bot.callbackQuery(/^r:add$/, async (ctx) => {
   if (!ctx.chat || !ctx.from) return ctx.answerCallbackQuery();
   setPending(ctx.chat.id, ctx.from.id, { kind: "roster_add" });
-  await ctx.answerCallbackQuery();
-  await ctx.reply(rosterAddPromptText(), { parse_mode: "HTML" });
+  await privateReply(ctx, rosterAddPromptText(), { parse_mode: "HTML" });
+  await ctx.answerCallbackQuery().catch(() => {});
 });
 
 bot.callbackQuery(/^r:done$/, async (ctx) => {
@@ -280,7 +296,7 @@ bot.callbackQuery(/^r:done$/, async (ctx) => {
   const roster = q.getRoster(ctx.chat.id);
   await ctx.answerCallbackQuery();
   try {
-    await ctx.editMessageText(rosterDoneText(roster), { reply_markup: { inline_keyboard: [] } });
+    await finishFlow(ctx, rosterDoneText(roster));
   } catch {
     /* ignore */
   }
@@ -293,7 +309,7 @@ bot.callbackQuery(/^r:done$/, async (ctx) => {
 bot.callbackQuery(/^skip:cancel$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   try {
-    await ctx.deleteMessage();
+    await deleteFlowMessage(ctx);
   } catch {
     /* ignore */
   }
@@ -316,9 +332,7 @@ bot.callbackQuery(/^skip:(-?\d+)$/, async (ctx) => {
   ctx.answerCallbackQuery({ text: `Marked ${label} as no-show.` }).catch(() => {});
   await session.markSkip({ sessionId: s.id, userId });
   try {
-    await ctx.editMessageText(`Marked ${label} as no-show for tonight.`, {
-      reply_markup: { inline_keyboard: [] },
-    });
+    await finishFlow(ctx, `Marked ${escapeHtml(label)} as no-show for tonight.`, "transient");
   } catch {
     /* ignore */
   }
@@ -337,7 +351,7 @@ bot.callbackQuery(/^s:t:(\d+)$/, async (ctx) => {
   const current = readStacksFromKeyboard(ctx) ?? q.parseStacks(chat.valid_stacks);
   const next = current.includes(n) ? current.filter((x) => x !== n) : [...current, n];
   try {
-    await ctx.editMessageReplyMarkup({ reply_markup: stacksKeyboard(next) });
+    await editFlowMarkup(ctx, stacksKeyboard(next));
   } catch {
     /* ignore */
   }
@@ -351,7 +365,7 @@ bot.callbackQuery(/^s:save$/, async (ctx) => {
   q.setChatStacks(ctx.chat.id, sorted);
   await session.refreshActiveSession(ctx.chat.id);
   try {
-    await ctx.editMessageText(stacksSavedText(sorted), { reply_markup: { inline_keyboard: [] } });
+    await finishFlow(ctx, stacksSavedText(sorted), "post");
   } catch {
     /* ignore */
   }
@@ -360,7 +374,7 @@ bot.callbackQuery(/^s:save$/, async (ctx) => {
 bot.callbackQuery(/^s:x$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   try {
-    await ctx.deleteMessage();
+    await deleteFlowMessage(ctx);
   } catch {
     /* ignore */
   }
@@ -396,10 +410,7 @@ bot.callbackQuery(/^tz:set:(\d+)$/, async (ctx) => {
   q.setChatTz(ctx.chat.id, tz);
   await ctx.answerCallbackQuery({ text: `Set to ${tz}` });
   try {
-    await ctx.editMessageText(tzSavedText(tz), {
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: [] },
-    });
+    await finishFlow(ctx, tzSavedText(tz), "post");
   } catch {
     /* ignore */
   }
@@ -408,14 +419,14 @@ bot.callbackQuery(/^tz:set:(\d+)$/, async (ctx) => {
 bot.callbackQuery(/^tz:other$/, async (ctx) => {
   if (!ctx.chat || !ctx.from) return ctx.answerCallbackQuery();
   setPending(ctx.chat.id, ctx.from.id, { kind: "tz_other" });
-  await ctx.answerCallbackQuery();
-  await ctx.reply(tzOtherPromptText(), { parse_mode: "HTML" });
+  await privateReply(ctx, tzOtherPromptText(), { parse_mode: "HTML" });
+  await ctx.answerCallbackQuery().catch(() => {});
 });
 
 bot.callbackQuery(/^tz:x$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   try {
-    await ctx.deleteMessage();
+    await deleteFlowMessage(ctx);
   } catch {
     /* ignore */
   }

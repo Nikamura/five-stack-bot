@@ -43,7 +43,7 @@ Time selections in the Mini App take effect only after **Save**. Choosing one ti
 
 The organizer opens tonight's session in either of two ways:
 
-- `/lfp` shows a start-hour picker, an end-hour picker offering later hours, and a confirmation with roster size and current enabled stacks.
+- `/lfp` shows a start-hour picker, an end-hour picker offering later hours, and a confirmation with roster size and current enabled stacks. The picker is private to the organizer (§5.7); only the opened session is posted to the group.
 - `/lfp 18-23` opens immediately. Bounds accept `19`, `19:30` or `1930`; minutes must be :00 or :30. End `24`, `24:00` or `2400` means midnight. Optional `[5,3,2]` persists stack choices and `@mentions` add roster players in the same command.
 
 For `/lfp 12-22`, selectable candidate starts run from **12:00 through 21:30**. The end is a boundary, not another candidate start. The group message tags the roster and offers **Set my availability** plus **Can't play tonight**. The organizer submits their own response using the same flow as everyone else.
@@ -132,6 +132,15 @@ Before the first start, time, size or core-lineup changes edit GAME ON and post 
 ### 5.7 Permissions and authentication
 
 Group command management is trust-based: any group member may manage sessions, roster and settings. Commands are audited locally. Bot admin privileges are optional: Pin messages supports silent pinning/unpinning, and Delete messages supports command cleanup. Redundant bot confirmations disappear after about eight seconds.
+
+Personal and administrative exchanges use Telegram ephemeral messages, visible only to the requesting member and the bot, so they do not clutter the group:
+
+- **Private:** the `/lfp` wizard, the `/lfp_roster`, `/lfp_remove`, `/lfp_skip`, `/lfp_tz` and `/lfp_stacks` pickers, removal and `/lfp_cancel` confirmations, add/timezone prompts, `/lfp_stats`, `/help`, all `/lfp_link`, `/lfp_link_bulk` and `/lfp_unlink` replies, and usage or validation errors.
+- **Public:** the session message, GAME ON, reminders, party-plan updates and match results. Changes to shared state are still announced: roster additions/removals and session skips as short-lived confirmations, timezone and party-size changes as a normal message.
+- In groups, `/lfp_roster`, `/lfp_tz`, `/lfp_stacks`, `/lfp_stats`, `/lfp_link`, `/lfp_link_bulk`, `/lfp_unlink` and `/help` are registered as ephemeral commands, so the command itself is hidden too. `/lfp`, `/lfp_add`, `/lfp_remove`, `/lfp_skip`, `/lfp_bump` and `/lfp_cancel` stay visible: they act on the shared session or roster, and `/lfp` and `/lfp_add` rely on mentions and replies.
+- Button presses that need explaining (a refused decline, a retired voting button, missing Mini App setup, a failed reminder) get a private message instead of a toast. Short acknowledgements remain toasts.
+
+Telegram accepts an ephemeral message within 15 seconds of a button press or ephemeral command, or at any time when the bot is a group administrator. When it is refused, the bot falls back to the earlier public reply or toast, so no flow depends on it. A private picker sent in response to a visible command also removes that command when the bot may delete messages.
 
 The Mini App backend validates Telegram's raw `initData` HMAC with constant-time comparison, rejects duplicate fields, validates the user ID and checks launch age (24 hours, with 30 seconds of future clock tolerance). Both Telegram's signature and a bot-signed session token bind the launch to its session. Client-supplied user IDs, URL session IDs and `initDataUnsafe` are never authorization sources.
 
@@ -234,7 +243,7 @@ A newly created party search gets at most one short, silent reply alongside its 
 
 Prerequisite: a roster member explicitly maps an account with `/lfp_link TelegramID Game Name#TAG euw1`; omit TelegramID to link the sender. `/lfp_unlink [TelegramID]` removes that link for this chat. Both actor and target must be in this chat’s roster with real positive Telegram IDs. This follows the private group’s trust model: roster members can manage each other’s links, with actor and target recorded in the audit log. The supplied Telegram ID identifies the target; names are never used for automatic account matching. A placeholder roster entry must first be bound by voting (or a friend can add the actual sender via a reply). The public tracker resolver validates the full Riot ID/platform. This is a manually declared association, not proof of Riot account ownership. No name guessing, token, or Riot key is involved. Store origin, PUUID, full Riot ID and platform per chat/user; reject duplicate accounts within a chat. Roster removal cascades to its link. Changed/missing accounts require explicit `/lfp_link` again; do not silently reassign identities.
 
-`/lfp_link_bulk` accepts 1–10 nonblank lines of `TelegramID Game Name#TAG platform`. Every line requires an explicit positive Telegram ID in this chat’s roster; duplicate target IDs and duplicate resolved accounts are rejected. Resolve all accounts with the existing two-second per-request timeout before saving. The entire batch, including its actor/target audit record, is one SQLite transaction; failure leaves every mapping unchanged. Existing target mappings may be replaced or swapped; links outside the batch remain untouched. Return one confirmation naming all saved mappings, or one error. Repeating a successful batch preserves the same mappings.
+`/lfp_link_bulk` accepts 1–10 nonblank lines of `TelegramID Game Name#TAG platform`. Every line requires an explicit positive Telegram ID in this chat’s roster; duplicate target IDs and duplicate resolved accounts are rejected. Resolve all accounts with the existing two-second per-request timeout before saving. The entire batch, including its actor/target audit record, is one SQLite transaction; failure leaves every mapping unchanged. Existing target mappings may be replaced or swapped; links outside the batch remain untouched. Return one confirmation naming all saved mappings, or one error. Link command replies are private to the sender (§5.7). Repeating a successful batch preserves the same mappings.
 
 Facts use the current linked roster, before a lineup exists: at least two linked friends on the same team in a flex game (queue 440), counted once by match ID. Matches with linked friends on opposing teams are omitted. Wording always identifies linked friends, shared flex games and recorded results. No individual blame or claims about current availability. `/lfp_stats` remains local scheduling metrics.
 

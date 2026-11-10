@@ -7,9 +7,10 @@ import type { MessageEntity } from "grammy/types";
 import { bot } from "./instance.js";
 import {
   commandTail,
-  ephemeralReply,
   isGroup,
+  privateReply,
   senderDisplayName,
+  transientReply,
   tryDeleteCommandMessage,
 } from "./util.js";
 import * as q from "../db/queries.js";
@@ -45,39 +46,39 @@ bot.command("lfp_link_bulk", async ctx => {
   } catch (error) {
     reply = `${error instanceof Error ? error.message : "Couldn’t process the batch."}\nNo mappings were changed.`;
   }
-  await ctx.reply(reply);
+  await privateReply(ctx, reply);
 });
 
 bot.command("lfp_link", async ctx => {
   if (!isGroup(ctx) || !ctx.from || !ctx.chat) return;
   if (!q.getRosterMember(ctx.chat.id, ctx.from.id)) {
-    await ctx.reply("Vote in a party search to bind your roster entry first, or ask a friend to reply to your message with /lfp_add. Then link your account.");
+    await privateReply(ctx, "Vote in a party search to bind your roster entry first, or ask a friend to reply to your message with /lfp_add. Then link your account.");
     return;
   }
   const parsed = parseAccountLink(commandTail(ctx.message?.text), ctx.from.id);
-  if (!parsed) { await ctx.reply("Use /lfp_link [Telegram ID] Game Name#TAG euw1. Omit the Telegram ID to link yourself."); return; }
+  if (!parsed) { await privateReply(ctx, "Use /lfp_link [Telegram ID] Game Name#TAG euw1. Omit the Telegram ID to link yourself."); return; }
   const member = q.getRosterMember(ctx.chat.id, parsed.userId);
-  if (!member) { await ctx.reply("That Telegram ID isn’t in this chat’s roster. Add the player by replying to their message with /lfp_add first."); return; }
+  if (!member) { await privateReply(ctx, "That Telegram ID isn’t in this chat’s roster. Add the player by replying to their message with /lfp_add first."); return; }
   try {
     const link = await resolveAccount(parsed.gameName, parsed.tagLine, parsed.platform);
     q.setRiotLink(ctx.chat.id, parsed.userId, link);
     q.audit(ctx.chat.id, ctx.from.id, "/lfp_link", `${parsed.userId} ${link.gameName}#${link.tagLine} ${link.platform}`);
-    await ctx.reply(`Linked ${member.display_name} (${parsed.userId}): ${link.gameName}#${link.tagLine} (${link.platform}).`);
-  } catch { await ctx.reply("Couldn’t link that account. Check the full Riot ID and platform in the tracker; it may be unavailable or already linked in this chat. Try /lfp_link again to explicitly relink a changed account."); }
+    await privateReply(ctx, `Linked ${member.display_name} (${parsed.userId}): ${link.gameName}#${link.tagLine} (${link.platform}).`);
+  } catch { await privateReply(ctx, "Couldn’t link that account. Check the full Riot ID and platform in the tracker; it may be unavailable or already linked in this chat. Try /lfp_link again to explicitly relink a changed account."); }
 });
 bot.command("lfp_unlink", async ctx => {
   if (!isGroup(ctx) || !ctx.from || !ctx.chat) return;
-  if (!q.getRosterMember(ctx.chat.id, ctx.from.id)) { await ctx.reply("Join this chat’s roster before managing account links."); return; }
+  if (!q.getRosterMember(ctx.chat.id, ctx.from.id)) { await privateReply(ctx, "Join this chat’s roster before managing account links."); return; }
   const arg = commandTail(ctx.message?.text);
   const userId = arg ? Number(arg) : ctx.from.id;
   if ((arg && !/^\d+$/.test(arg)) || !Number.isSafeInteger(userId) || userId <= 0) {
-    await ctx.reply("Use /lfp_unlink [Telegram ID]. Omit the ID to unlink yourself."); return;
+    await privateReply(ctx, "Use /lfp_unlink [Telegram ID]. Omit the ID to unlink yourself."); return;
   }
   const member = q.getRosterMember(ctx.chat.id, userId);
-  if (!member) { await ctx.reply("That Telegram ID isn’t in this chat’s roster."); return; }
+  if (!member) { await privateReply(ctx, "That Telegram ID isn’t in this chat’s roster."); return; }
   q.deleteRiotLink(ctx.chat.id, userId);
   q.audit(ctx.chat.id, ctx.from.id, "/lfp_unlink", String(userId));
-  await ctx.reply(`Removed the Riot account link for ${member.display_name} (${userId}) in this chat.`);
+  await privateReply(ctx, `Removed the Riot account link for ${member.display_name} (${userId}) in this chat.`);
 });
 
 interface AddedMember {
@@ -114,7 +115,8 @@ bot.command("lfp", async (ctx) => {
   if (arg) {
     const parsed = parseLfpArgs(arg);
     if (!parsed.range) {
-      await ctx.reply(
+      await privateReply(
+        ctx,
         "Couldn't parse a range. Try <code>/lfp 18-23</code>, " +
           "<code>/lfp 19:30-21</code>, <code>/lfp 1930-21</code>, " +
           "<code>/lfp 18-23 [5,3,2] @karolis @tomas</code>, " +
@@ -131,7 +133,7 @@ bot.command("lfp", async (ctx) => {
     const added = tryAddFromMessage(ctx);
 
     if (q.getRoster(ctx.chat.id).length === 0) {
-      await ctx.reply(rosterEmptyOnLfpText(), { parse_mode: "HTML" });
+      await privateReply(ctx, rosterEmptyOnLfpText(), { parse_mode: "HTML" });
       return;
     }
     if (added.length > 0) {
@@ -142,10 +144,11 @@ bot.command("lfp", async (ctx) => {
   }
 
   if (q.getRoster(ctx.chat.id).length === 0) {
-    await ctx.reply(rosterEmptyOnLfpText(), { parse_mode: "HTML" });
+    await privateReply(ctx, rosterEmptyOnLfpText(), { parse_mode: "HTML" });
     return;
   }
-  await ctx.reply(wizardStep1Text(), { reply_markup: wizardStep1Keyboard() });
+  // The picker is the organizer's own; only the opened session is public.
+  await privateReply(ctx, wizardStep1Text(), { reply_markup: wizardStep1Keyboard() });
 });
 
 async function openShortcut(ctx: Context, startMinutes: number, endMinutes: number) {
@@ -158,7 +161,7 @@ async function openShortcut(ctx: Context, startMinutes: number, endMinutes: numb
     endMinutes,
   });
   if (typeof result === "object") {
-    await ctx.reply(existingSessionText());
+    await privateReply(ctx, existingSessionText());
   }
 }
 
@@ -172,7 +175,7 @@ bot.command(["lfp_bump", "lfpbump", "lfp_show", "lfpshow"], async (ctx) => {
   q.audit(ctx.chat.id, ctx.from.id, "/lfp-bump");
   const moved = await session.bumpSessionPoll(ctx.chat.id);
   tryDeleteCommandMessage(ctx);
-  if (!moved) await ephemeralReply(ctx, noActiveSessionText());
+  if (!moved) await privateReply(ctx, noActiveSessionText(), {}, "transient");
 });
 
 bot.command(["lfp_cancel", "lfpcancel"], async (ctx) => {
@@ -180,11 +183,11 @@ bot.command(["lfp_cancel", "lfpcancel"], async (ctx) => {
   q.audit(ctx.chat.id, ctx.from.id, "/lfp-cancel");
   const s = q.getActiveSession(ctx.chat.id);
   if (!s) {
-    await ctx.reply(noActiveSessionText());
+    await privateReply(ctx, noActiveSessionText());
     return;
   }
   tryDeleteCommandMessage(ctx);
-  await ctx.reply(cancelConfirmText(), { reply_markup: cancelConfirmKeyboard(s.id) });
+  await privateReply(ctx, cancelConfirmText(), { reply_markup: cancelConfirmKeyboard(s.id) });
 });
 
 // ----------------------------------------------------------------------------
@@ -196,7 +199,7 @@ bot.command(["lfp_roster", "lfproster"], async (ctx) => {
   q.audit(ctx.chat.id, ctx.from.id, "/lfp-roster");
   q.getOrCreateChat(ctx.chat.id);
   const roster = q.getRoster(ctx.chat.id);
-  await ctx.reply(rosterHeaderText(roster), {
+  await privateReply(ctx, rosterHeaderText(roster), {
     parse_mode: "HTML",
     reply_markup: rosterKeyboard(roster),
   });
@@ -215,11 +218,11 @@ bot.command(["lfp_add", "lfpadd"], async (ctx) => {
   if (added.length > 0) {
     await session.refreshActiveSession(ctx.chat.id);
     tryDeleteCommandMessage(ctx);
-    await ephemeralReply(ctx, addedReply(added));
+    await transientReply(ctx, addedReply(added));
     return;
   }
   setPending(ctx.chat.id, ctx.from.id, { kind: "roster_add" });
-  await ctx.reply(rosterAddPromptText(), { parse_mode: "HTML" });
+  await privateReply(ctx, rosterAddPromptText(), { parse_mode: "HTML" });
 });
 
 function addedReply(added: AddedMember[]): string {
@@ -299,21 +302,21 @@ bot.command(["lfp_remove", "lfpremove"], async (ctx) => {
     const handle = arg.replace(/^@/, "").trim();
     const m = q.findRosterByUsername(ctx.chat.id, handle);
     if (!m) {
-      await ctx.reply(`@${handle} is not in the roster.`);
+      await privateReply(ctx, `@${handle} is not in the roster.`);
       return;
     }
     q.removeRosterMember(ctx.chat.id, m.telegram_user_id);
     await session.refreshActiveSession(ctx.chat.id);
     tryDeleteCommandMessage(ctx);
-    await ephemeralReply(ctx, `Removed @${handle}.`);
+    await transientReply(ctx, `Removed @${handle}.`);
     return;
   }
   const roster = q.getRoster(ctx.chat.id);
   if (roster.length === 0) {
-    await ctx.reply("Roster is empty.");
+    await privateReply(ctx, "Roster is empty.");
     return;
   }
-  await ctx.reply(rosterHeaderText(roster), {
+  await privateReply(ctx, rosterHeaderText(roster), {
     parse_mode: "HTML",
     reply_markup: rosterKeyboard(roster),
   });
@@ -328,14 +331,14 @@ bot.command(["lfp_skip", "lfpskip"], async (ctx) => {
   q.audit(ctx.chat.id, ctx.from.id, "/lfp-skip", commandTail(ctx.message?.text));
   const s = q.getActiveSession(ctx.chat.id);
   if (!s) {
-    await ctx.reply(noActiveSessionText());
+    await privateReply(ctx, noActiveSessionText());
     return;
   }
   const arg = commandTail(ctx.message?.text);
   if (!arg) {
     const roster = q.getRoster(ctx.chat.id);
     if (roster.length === 0) {
-      await ctx.reply("Roster is empty.");
+      await privateReply(ctx, "Roster is empty.");
       return;
     }
     const kb = new InlineKeyboard();
@@ -344,18 +347,18 @@ bot.command(["lfp_skip", "lfpskip"], async (ctx) => {
       kb.text(label, `skip:${m.telegram_user_id}`).row();
     }
     kb.text("Cancel", "skip:cancel");
-    await ctx.reply("Mark as no-show for tonight:", { reply_markup: kb });
+    await privateReply(ctx, "Mark as no-show for tonight:", { reply_markup: kb });
     return;
   }
   const handle = arg.replace(/^@/, "").trim();
   const m = q.findRosterByUsername(ctx.chat.id, handle);
   if (!m) {
-    await ctx.reply(`@${handle} is not in the roster.`);
+    await privateReply(ctx, `@${handle} is not in the roster.`);
     return;
   }
   await session.markSkip({ sessionId: s.id, userId: m.telegram_user_id });
   tryDeleteCommandMessage(ctx);
-  await ephemeralReply(ctx, `Marked @${handle} as no-show for this session.`);
+  await transientReply(ctx, `Marked @${handle} as no-show for this session.`);
 });
 
 // ----------------------------------------------------------------------------
@@ -369,15 +372,15 @@ bot.command(["lfp_tz", "lfptz"], async (ctx) => {
   const arg = commandTail(ctx.message?.text);
   if (arg) {
     if (!isValidIanaZone(arg)) {
-      await ctx.reply(`'${escapeHtml(arg)}' isn't a valid IANA zone.`, { parse_mode: "HTML" });
+      await privateReply(ctx, `'${escapeHtml(arg)}' isn't a valid IANA zone.`, { parse_mode: "HTML" });
       return;
     }
     q.setChatTz(ctx.chat.id, arg);
     tryDeleteCommandMessage(ctx);
-    await ephemeralReply(ctx, `🌍 Timezone set to <code>${escapeHtml(arg)}</code>.`);
+    await transientReply(ctx, `🌍 Timezone set to <code>${escapeHtml(arg)}</code>.`);
     return;
   }
-  await ctx.reply(tzText(chat.tz), { parse_mode: "HTML", reply_markup: tzKeyboard() });
+  await privateReply(ctx, tzText(chat.tz), { parse_mode: "HTML", reply_markup: tzKeyboard() });
 });
 
 // ----------------------------------------------------------------------------
@@ -389,7 +392,7 @@ bot.command(["lfp_stacks", "lfpstacks"], async (ctx) => {
   q.audit(ctx.chat.id, ctx.from.id, "/lfp-stacks");
   const chat = q.getOrCreateChat(ctx.chat.id);
   const current = q.parseStacks(chat.valid_stacks);
-  await ctx.reply(stacksText(), { reply_markup: stacksKeyboard(current) });
+  await privateReply(ctx, stacksText(), { reply_markup: stacksKeyboard(current) });
 });
 
 // ----------------------------------------------------------------------------
@@ -423,7 +426,7 @@ bot.command(["lfp_stats", "lfpstats"], async (ctx) => {
       lines.push(`  ${escapeHtml(j.display_name)}: ${pct}% (${j.joined}/${j.total})`);
     }
   }
-  await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+  await privateReply(ctx, lines.join("\n"), { parse_mode: "HTML" });
 });
 
 // ----------------------------------------------------------------------------
@@ -432,7 +435,7 @@ bot.command(["lfp_stats", "lfpstats"], async (ctx) => {
 
 bot.command(["help", "lfp_help", "lfphelp", "start"], async (ctx) => {
   if (ctx.chat && ctx.from) q.audit(ctx.chat.id, ctx.from.id, "/help");
-  await ctx.reply(HELP_TEXT, { parse_mode: "HTML" });
+  await privateReply(ctx, HELP_TEXT, { parse_mode: "HTML" });
 });
 
 // ----------------------------------------------------------------------------
@@ -449,20 +452,21 @@ bot.on("message:text", async (ctx, next) => {
   if (pending.kind === "roster_add") {
     const added = tryAddFromMessage(ctx);
     if (added.length === 0) {
-      await ctx.reply(
+      await privateReply(
+        ctx,
         "Couldn't find a username or user mention. Try again with @username.",
       );
       return;
     }
     await session.refreshActiveSession(ctx.chat.id);
-    await ephemeralReply(ctx, addedReply(added));
+    await transientReply(ctx, addedReply(added));
     return;
   }
 
   if (pending.kind === "tz_other") {
     const tz = ctx.message.text.trim();
     if (!isValidIanaZone(tz)) {
-      await ctx.reply(`'${escapeHtml(tz)}' isn't a valid IANA zone.`, {
+      await privateReply(ctx, `'${escapeHtml(tz)}' isn't a valid IANA zone.`, {
         parse_mode: "HTML",
       });
       setPending(ctx.chat.id, ctx.from.id, { kind: "tz_other" });

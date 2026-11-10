@@ -59,6 +59,12 @@ Save commits the complete database answer, queues evaluation once, and returns t
 
 `safeEditMessage` tolerates unchanged/missing messages and retries Telegram 429 once using `retry_after`. `/lfp_bump` updates `poll_message_id`; session links and legacy callbacks route by session ID, not message ID.
 
+## Private replies (ephemeral messages)
+
+`bot/util.ts` owns Bot API 10.2+ ephemeral messaging. `privateReply` answers a command or button for its sender only and falls back to the public reply; `privateNotice` replaces an explanatory callback toast and falls back to that toast. Both always pass `receiver_user_id`, plus `callback_query_id` for button presses or `reply_parameters.ephemeral_message_id` for ephemeral commands. Never make a flow depend on an ephemeral send succeeding: Telegram refuses it outside the 15-second window unless the bot is an admin.
+
+A picker may therefore be an ephemeral message (`message_id` 0, `ephemeral_message_id` set) or a regular one. Its callbacks must go through `editFlowMessage`, `editFlowMarkup`, `deleteFlowMessage` and `finishFlow`, never `ctx.editMessageText`/`ctx.deleteMessage` directly. `finishFlow` posts a public result (`"post"` or `"transient"`) when a private picker changed shared state. Session, GAME ON, reminder and plan messages stay public. Commands flagged `personal` in `src/index.ts` are registered with `is_ephemeral` for group chats only.
+
 ## Lock evaluation
 
 `evaluateLock` chooses the earliest playable start and the largest enabled party at that start (default sizes 5/3/2). It never delays an early playable party for a later larger or more certain one. Seats rank Yes, Maybe, filler, then vote time within each category.

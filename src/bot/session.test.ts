@@ -15,12 +15,16 @@ const { bot } = await import("./instance.js");
 const { withMutex } = await import("./mutex.js");
 const { getAvailabilitySnapshot, saveAvailability } = await import("./availability.js");
 await import("./callbacks.js");
+await import("./commands.js");
+const { GrammyError } = await import("grammy");
 
 const now = Date.parse("2026-09-06T12:15:00Z");
 let clockNow = now;
 let sessionId = 0;
 let nextMessage = 100;
-const calls: Array<{ method: string; text?: string; options?: unknown }> = [];
+const calls: Array<{ method: string; text?: string; options?: any }> = [];
+// Telegram refuses ephemeral sends outside the 15-second window unless the bot is an admin.
+let refuseEphemeral = false;
 
 before(() => {
   mock.method(Date, "now", () => clockNow);
@@ -32,6 +36,12 @@ before(() => {
   // Contexts clone the API client; a transformer also intercepts callback calls.
   bot.api.config.use(async (_previous, method, payload) => {
     calls.push({ method, options: payload });
+    if (method === "sendMessage") {
+      if (refuseEphemeral && (payload as any).ephemeral_message_parameters) {
+        throw new GrammyError("fixture", { ok: false, error_code: 400, description: "Bad Request: ephemeral refused" }, method, payload);
+      }
+      return { ok: true, result: { message_id: nextMessage++, date: 0, chat: { id: 1, type: "supergroup" } } } as any;
+    }
     return { ok: true, result: true } as any;
   });
   mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected network request in session test"); });
@@ -57,6 +67,7 @@ before(() => {
 
 beforeEach(() => {
   clockNow = now;
+  refuseEphemeral = false;
   db.exec("DELETE FROM chats; DELETE FROM scheduled_jobs");
   calls.length = 0;
   q.getOrCreateChat(1);
@@ -126,7 +137,15 @@ describe("v2 session integration", () => {
     const upgrades = calls.filter((call) => call.method === "editMessageReplyMarkup");
     assert.equal(upgrades.length, 4);
     assert.ok(upgrades.every((call) => JSON.stringify(call.options).includes("https://t.me/TestBot?startapp=")));
-    assert.equal(calls.filter((call) => call.method === "sendMessage").length, 0);
+    // The explanation stays readable for the member who tapped, and nobody else.
+    const notices = calls.filter((call) => call.method === "sendMessage");
+    assert.equal(notices.length, 4);
+    for (const notice of notices) {
+      assert.match(notice.options.text, /Voting moved to the availability picker/);
+      assert.equal(notice.options.ephemeral_message_parameters.receiver_user_id, 1);
+      assert.match(notice.options.ephemeral_message_parameters.callback_query_id, /^query-/);
+    }
+    assert.ok(calls.filter((call) => call.method === "answerCallbackQuery").every((call) => !call.options?.text));
   });
 
   it("uses both old and current No callbacks to save a direct complete decline", async () => {
@@ -152,13 +171,26 @@ describe("v2 session integration", () => {
     calls.length = 0;
     await clickNo(99);
     assert.deepEqual(q.getSessionVotes(sessionId), votes);
-    assert.match(JSON.stringify(calls[0]!.options), /Only this group's roster/);
-    assert.match(JSON.stringify(calls[0]!.options), /"show_alert":true/);
+    assert.equal(calls[0]!.method, "sendMessage");
+    assert.match(calls[0]!.options.text, /Only this group's roster/);
+    assert.equal(calls[0]!.options.ephemeral_message_parameters.receiver_user_id, 99);
+    assert.match(calls[0]!.options.ephemeral_message_parameters.callback_query_id, /^decline-/);
+    assert.equal(calls[1]!.method, "answerCallbackQuery");
+    assert.equal(calls[1]!.options.text, undefined);
+    // A refused ephemeral message falls back to the previous alert.
+    refuseEphemeral = true;
+    calls.length = 0;
+    await clickNo(99);
+    assert.deepEqual(q.getSessionVotes(sessionId), votes);
+    const alert = calls.find((call) => call.method === "answerCallbackQuery")!;
+    assert.match(JSON.stringify(alert.options), /Only this group's roster/);
+    assert.match(JSON.stringify(alert.options), /"show_alert":true/);
+    refuseEphemeral = false;
     q.archiveSession(sessionId);
     calls.length = 0;
     await clickNo(1);
-    assert.match(JSON.stringify(calls[0]!.options), /Voting has ended/);
-    assert.match(JSON.stringify(calls[0]!.options), /"show_alert":true/);
+    assert.match(calls[0]!.options.text, /Voting has ended/);
+    assert.equal(calls[0]!.options.ephemeral_message_parameters.receiver_user_id, 1);
   });
 
   it("ignores past-slot majorities when evaluating the next party", async () => {
@@ -371,4 +403,100 @@ describe("v2 session integration", () => {
     assert.doesNotMatch(edit,/@player5|save your availability for 13:00/);
   });
 
+});
+
+describe("private flows through ephemeral messages", () => {
+  const group = { id: 1, type: "supergroup" as const, title: "Test" };
+  const from = { id: 1, is_bot: false, first_name: "One", username: "one" };
+  const command = (text: string, ephemeralId?: number) => bot.handleUpdate({ update_id: nextMessage++, message: {
+    message_id: ephemeralId ? 0 : nextMessage++, date: now / 1000, chat: group, from, text,
+    entities: [{ type: "bot_command", offset: 0, length: text.split(/\s/)[0]!.length }],
+    ...(ephemeralId ? { ephemeral_message_id: ephemeralId } : {}),
+  } });
+  const press = (data: string, ephemeralId?: number) => bot.handleUpdate({ update_id: nextMessage++, callback_query: {
+    id: `press-${nextMessage}`, from, chat_instance: "chat-one", data,
+    message: { message_id: ephemeralId ? 0 : 60, date: now / 1000, chat: group,
+      ...(ephemeralId ? { ephemeral_message_id: ephemeralId, receiver_user: from } : {}) },
+  } });
+  const sends = () => calls.filter((call) => call.method === "sendMessage");
+
+  it("answers an ephemeral command as a reply only its sender can see", async () => {
+    await command("/lfp_stats", 7);
+    assert.equal(sends().length, 1);
+    assert.match(sends()[0]!.options.text, /Chat stats/);
+    assert.deepEqual(sends()[0]!.options.ephemeral_message_parameters, { receiver_user_id: 1 });
+    assert.deepEqual(sends()[0]!.options.reply_parameters, { ephemeral_message_id: 7 });
+    // Nothing visible exists to clean up.
+    assert.equal(calls.filter((call) => call.method === "deleteMessage").length, 0);
+  });
+
+  it("keeps a visible command's picker private when Telegram allows it, and removes the command", async () => {
+    q.archiveSession(sessionId);
+    await command("/lfp");
+    assert.match(sends()[0]!.options.text, /earliest player/);
+    assert.deepEqual(sends()[0]!.options.ephemeral_message_parameters, { receiver_user_id: 1 });
+    assert.equal(sends()[0]!.options.reply_parameters, undefined);
+    assert.equal(calls.filter((call) => call.method === "deleteMessage").length, 1);
+  });
+
+  it("falls back to the public reply when an ephemeral message is refused", async () => {
+    refuseEphemeral = true;
+    await command("/lfp_tz");
+    assert.equal(sends().length, 2);
+    assert.equal(sends()[1]!.options.ephemeral_message_parameters, undefined);
+    assert.match(sends()[1]!.options.text, /Current timezone/);
+    assert.equal(calls.filter((call) => call.method === "deleteMessage").length, 0);
+  });
+
+  it("edits a private wizard in place and posts only the opened session publicly", async () => {
+    q.archiveSession(sessionId);
+    await press("lfp:start:1080", 9);
+    const step = calls.find((call) => call.method === "editEphemeralMessageText")!;
+    assert.equal(step.options.ephemeral_message_id, 9);
+    assert.equal(step.options.receiver_user_id, 1);
+    assert.match(step.options.text, /Earliest start: 18:00/);
+    assert.equal(calls.filter((call) => call.method === "editMessageText").length, 0);
+    calls.length = 0;
+    await press("lfp:open:1080:1260", 9);
+    assert.equal(calls.filter((call) => call.method === "deleteEphemeralMessage").length, 1);
+    assert.equal(calls.filter((call) => call.method === "editEphemeralMessageText").length, 0);
+    const opened = sends().find((call) => /looking for a party/.test(call.text ?? ""))!;
+    assert.equal((opened.options as any).ephemeral_message_parameters, undefined);
+  });
+
+  it("announces a privately chosen timezone to the group", async () => {
+    await press("tz:set:1", 9);
+    assert.equal(q.getOrCreateChat(1).tz, "Europe/Berlin");
+    assert.equal(calls.filter((call) => call.method === "deleteEphemeralMessage").length, 1);
+    assert.equal(sends().length, 1);
+    assert.equal(sends()[0]!.options.ephemeral_message_parameters, undefined);
+    assert.match(sends()[0]!.options.text, /Timezone set to <code>Europe\/Berlin/);
+  });
+
+  it("still edits a public picker in place", async () => {
+    await press("tz:set:1");
+    const edit = calls.find((call) => call.method === "editMessageText")!;
+    assert.match(edit.options.text, /Timezone set to/);
+    assert.equal(sends().length, 0);
+    assert.equal(calls.filter((call) => call.method === "deleteEphemeralMessage").length, 0);
+  });
+
+  it("confirms a roster removal privately and announces the result", async () => {
+    await press("r:rm:2", 9);
+    assert.match(sends()[0]!.options.text, /Remove @two from the roster/);
+    assert.equal(sends()[0]!.options.ephemeral_message_parameters.receiver_user_id, 1);
+    assert.match(sends()[0]!.options.ephemeral_message_parameters.callback_query_id, /^press-/);
+    assert.equal(q.getRosterMember(1, 2)?.telegram_user_id, 2);
+    calls.length = 0;
+    await press("r:rm!:2", 10);
+    assert.equal(q.getRosterMember(1, 2), null);
+    const announced = sends().find((call) => /Removed @two/.test(call.options?.text ?? ""))!;
+    assert.equal(announced.options.ephemeral_message_parameters, undefined);
+  });
+
+  it("keeps short acknowledgements as toasts", async () => {
+    await press("late:" + sessionId);
+    assert.equal(sends().length, 0);
+    assert.match(calls.find((call) => call.method === "answerCallbackQuery")!.options.text, /No locked party/);
+  });
 });
