@@ -435,6 +435,18 @@ describe("private flows through ephemeral messages", () => {
     assert.equal(calls.filter((call) => call.method === "deleteMessage").length, 0);
   });
 
+  it("opens the wizard privately from an ephemeral /lfp and still posts a shortcut session publicly", async () => {
+    q.archiveSession(sessionId);
+    await command("/lfp", 8);
+    assert.match(sends()[0]!.options.text, /earliest player/);
+    assert.deepEqual(sends()[0]!.options.reply_parameters, { ephemeral_message_id: 8 });
+    calls.length = 0;
+    await command("/lfp 18-21", 8);
+    const opened = sends().find((call) => /looking for a party/.test(call.text ?? ""))!;
+    assert.equal((opened.options as any).ephemeral_message_parameters, undefined);
+    assert.equal((opened.options as any).reply_parameters, undefined);
+  });
+
   it("keeps a visible command's picker private when Telegram allows it, and removes the command", async () => {
     q.archiveSession(sessionId);
     await command("/lfp");

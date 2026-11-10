@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { renderGameOn, renderSessionBody, renderSessionKeyboard, timeEntity, wizardStep2Text, wizardStep3Text } from "./render.js";
+import { renderGameOn, renderSessionBody, renderSessionKeyboard, renderVoteReminderKeyboard, timeEntity, wizardStep2Text, wizardStep3Text } from "./render.js";
 import { tallySlots } from "./lock.js";
 import type { RosterMember, SessionRow, VoteRow } from "../db/types.js";
 
@@ -57,6 +57,7 @@ describe("v2 availability summary", () => {
       text: "📅 Set my availability", url: "https://t.me/TestBot?startapp=s1_signed", style: "success",
     }], [{ text: "🚫 Can’t play tonight", callback_data: "vbn:1", style: "danger" }], [{ text: "🔔 Remind non-voters", callback_data: "vr:1" }]]);
     assert.doesNotMatch(JSON.stringify(keyboard), /web_app|vbay|vfill|"v:|"v2:/);
+    assert.deepEqual(renderVoteReminderKeyboard(1, "https://t.me/TestBot?startapp=s1_signed").inline_keyboard.flat().map((button) => button.style), ["success", "danger"]);
     assert.deepEqual(renderSessionKeyboard({ sessionId: 1 }).inline_keyboard, [[{
       text: "📅 Set my availability", callback_data: "app:setup:1", style: "success",
     }], [{ text: "🚫 Can’t play tonight", callback_data: "vbn:1", style: "danger" }], [{ text: "🔔 Remind non-voters", callback_data: "vr:1" }]]);

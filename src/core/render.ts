@@ -175,7 +175,9 @@ export function renderVoteReminderKeyboard(sessionId: number, miniAppUrl: string
   const kb = new InlineKeyboard();
   if (miniAppUrl) kb.url("🗳 Choose times", miniAppUrl);
   else kb.text("🗳 Choose times", `app:setup:${sessionId}`);
-  kb.row().text("🚫 Can't play tonight", `vbn:${sessionId}`);
+  // Same colours as the session message's answer buttons.
+  kb.success();
+  kb.row().text("🚫 Can't play tonight", `vbn:${sessionId}`).danger();
   return kb;
 }
 

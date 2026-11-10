@@ -13,12 +13,13 @@ import { startMatchResults } from "./bot/matchResults.js";
 setLogLevel(config.logLevel);
 
 /**
- * `personal` commands only answer their sender. Commands that act on the
- * shared session or roster stay visible, as do /lfp and /lfp_add, which
- * depend on @mentions and replies to another member's message.
+ * `personal` commands only answer their sender, so in groups the command is
+ * hidden too. /lfp qualifies because its wizard is private and the session it
+ * opens is posted publicly. Commands that change the shared session or roster
+ * stay visible; /lfp_add also depends on replying to another member's message.
  */
 const BOT_COMMANDS: { command: string; description: string; personal?: true }[] = [
-  { command: "lfp", description: "Open a session for tonight" },
+  { command: "lfp", description: "Open a session for tonight", personal: true },
   { command: "lfp_bump", description: "Re-post the poll at the bottom" },
   { command: "lfp_cancel", description: "Cancel the active session" },
   { command: "lfp_roster", description: "Show & manage the roster", personal: true },
