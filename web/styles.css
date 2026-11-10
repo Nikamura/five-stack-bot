@@ -187,6 +187,8 @@ select { appearance: auto; border: 1px solid var(--line); border-radius: var(--r
 .party-windows { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .party-windows h3 { font-size: 13px; }
 .party-window { padding: 9px 0; border-bottom: 1px solid var(--line); }
-.party-window strong { display: block; font: 600 13px var(--utility); letter-spacing: -.04em; }
+.party-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.party-window strong { font: 600 13px var(--utility); letter-spacing: -.04em; }
+.party-locked { flex-shrink: 0; font-size: 11px; font-weight: 600; color: var(--yes); }
 .party-window p { margin-top: 3px; }
 .party-windows > .caption { margin-top: 9px; font-size: 11px; }

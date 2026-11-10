@@ -287,7 +287,11 @@ function renderShared() {
   $('reply-count').textContent = `${responded}/${snapshot.players.length} answered`;
   $('roster-count').textContent = `(${snapshot.players.length})`;
   const strongest = strongestSlot(snapshot.slots, now());
-  if (snapshot.lock) {
+  // The locked party is marked inside the plan when the plan lists it; never print it twice.
+  const lockInPlan = Boolean(snapshot.lock && snapshot.parties?.some((party) => party.slot === snapshot.lock.slot));
+  $('overlap').hidden = lockInPlan;
+  if (lockInPlan) $('party').hidden = true;
+  else if (snapshot.lock) {
     $('overlap').textContent = `${snapshot.lock.size}-stack at ${formatTime(snapshot.lock.slot)}${closed() ? ' · final saved party' : ''}`;
     $('party').hidden = false;
     $('party').textContent = `${playerNames(snapshot.lock.core)}${snapshot.lock.alternates.length ? ` · Alternates: ${playerNames(snapshot.lock.alternates)}` : ''}`;
@@ -305,8 +309,13 @@ function renderShared() {
     for (const party of snapshot.parties) {
       const range = party.endSlot - 30 === party.slot ? formatTime(party.slot) : `${formatTime(party.slot)}–${formatTime(party.endSlot - 30)}`;
       const players = party.core.map(id => `${playerNames([id])}${party.fillerIds.includes(id) ? ' (if needed)' : party.maybeIds.includes(id) ? ' (maybe)' : ''}`).join(', ');
+      const locked = lockInPlan && party.slot === snapshot.lock.slot;
       const row = el('div', 'party-window');
-      row.append(el('strong', '', `${range} · ${party.size}-stack`), el('p', 'caption', players));
+      const heading = el('div', 'party-heading');
+      heading.append(el('strong', '', `${range} · ${party.size}-stack`));
+      if (locked) heading.append(el('span', 'party-locked', closed() ? 'Final party' : 'Locked'));
+      row.append(heading, el('p', 'caption', players));
+      if (locked && snapshot.lock.alternates.length) row.append(el('p', 'caption', `Alternates: ${playerNames(snapshot.lock.alternates)}`));
       windows.append(row);
     }
     windows.append(el('p', 'caption', 'Each entry lists possible starts for that lineup. Later parties don’t delay earlier ones.'));
@@ -382,6 +391,7 @@ async function remindNonVoters() {
 function renderLineups() {
   const snapshot = state.snapshot;
   const waiting = snapshot.players.filter((player) => !player.responded && !player.skipped).map((player) => player.id);
+  const unanswered = new Set(waiting);
   $('waiting-summary').textContent = waiting.length ? `Waiting for: ${playerNames(waiting)}` : 'Everyone has replied.';
   const lineups = $('lineups');
   lineups.replaceChildren();
@@ -394,7 +404,9 @@ function renderLineups() {
     const total = group.yes.length + group.maybe.length + group.filler.length;
     heading.append(el('span', 'caption', total ? `${total} available` : 'No one available yet'));
     row.append(heading);
-    for (const [label, ids, className] of [['In', group.yes, 'yes'], ['Maybe', group.maybe, 'maybe'], ['If needed', group.filler, 'muted'], ['Waiting', group.waiting, 'muted']]) {
+    // Players with no answer at all are named once above; repeat only partial answers here.
+    const partial = group.waiting.some((id) => !unanswered.has(id)) ? group.waiting : [];
+    for (const [label, ids, className] of [['In', group.yes, 'yes'], ['Maybe', group.maybe, 'maybe'], ['If needed', group.filler, 'muted'], ['Waiting', partial, 'muted']]) {
       if (!ids.length) continue;
       const answer = el('p', `lineup-answer ${className}`);
       answer.append(el('span', 'lineup-label', label), el('span', '', playerNames(ids)));
