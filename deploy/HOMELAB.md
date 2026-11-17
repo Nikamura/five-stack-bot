@@ -1,6 +1,31 @@
 # Mini App deployment on the homelab
 
-## Current release: private flows, tagged times and button styles
+## Current release: ignore late-delivered commands
+
+Deployed **2026-11-17 at 10:41:39 UTC** from application commit `5c1c1a7`.
+Telegram clients had re-delivered ephemeral `/lfp` commands around 03:15
+Vilnius, hours after they were typed. The private reply was refused
+(`REPLY_TO_INVALID`) and the bot posted a public picker in the night. The bot
+now drops any command more than two minutes old and logs every group command's
+send time (`Command /x from <id>: sent …`, `Ignored stale command …`). Schema
+unchanged.
+
+- Bot image: `five-stack-bot:stale-5c1c1a7`, also `latest`
+  (`sha256:33afbeee3b6c54e74fd3ee34ea65da32840c34f28655f24848ad8e95d1026cf7`).
+- Rollback image: `five-stack-bot:pre-stale-20261117T104101Z`.
+- Database backup: `/app/data/pre-stale-20261117T104101Z.db` in the volume.
+
+210 tests and typecheck passed. After cutover the bot was online with zero
+restarts, HTTPS health returned 200, and the image contains the new middleware.
+No session was active. The next nightly re-delivery should appear as an
+`Ignored stale command` log line. If it doesn't, check whether Telegram
+re-stamps the message date. If so, stop the `/lfp` picker from falling back to
+a public reply.
+
+Roll back by retagging the pre-stale image as `latest` and recreating only this
+service with `docker compose up -d --no-deps`.
+
+## Previous release: private flows, tagged times and button styles
 
 Deployed **2026-11-10 at 15:18:51 UTC** from application commit `bc15e09`
 (grammY 1.46.0, Bot API 10.3 types). Personal and administrative flows use
