@@ -142,6 +142,8 @@ Personal and administrative exchanges use Telegram ephemeral messages, visible o
 
 Telegram accepts an ephemeral message within 15 seconds of a button press or ephemeral command, or at any time when the bot is a group administrator. When it is refused, the bot falls back to the earlier public reply or toast, so no flow depends on it. A private picker sent in response to a visible command also removes that command when the bot may delete messages.
 
+The bot ignores any command that arrives more than two minutes after it was sent. Telegram clients sometimes deliver a queued or re-sent command hours later, and answering it would post a public picker in the middle of the night. A command that late is logged instead, so the user just sends it again.
+
 The Mini App backend validates Telegram's raw `initData` HMAC with constant-time comparison, rejects duplicate fields, validates the user ID and checks launch age (24 hours, with 30 seconds of future clock tolerance). Both Telegram's signature and a bot-signed session token bind the launch to its session. Client-supplied user IDs, URL session IDs and `initDataUnsafe` are never authorization sources.
 
 All API reads, streams and saves require authentication and roster membership. Credentials are sent in the Authorization header, never API query strings or logs. Saves require the configured same origin, JSON and a bounded body. Connection/request limits, a static-file allowlist and restrictive browser headers apply. Expired authorization requires reopening from the group.
